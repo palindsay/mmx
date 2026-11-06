@@ -72,6 +72,9 @@ for tests; the sample models are vendored under
 # Full verification (kernel + Studio)
 ./tool/verify.sh
 
+# Release build (packages CLI and Studio archives into dist/)
+./tool/build_release.sh
+
 # Kernel only
 cd packages/mmx_core
 dart pub get
