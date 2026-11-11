@@ -78,6 +78,9 @@ def validate_ui_report(report, *, host_id, expected_revision):
         raise ValueError('UI capture must use the native profile build')
     if report.get('provenance', {}).get('gitRevision') != expected_revision:
         raise ValueError('UI source revision differs from this capture')
+    harness = report['provenance'].get('harnessVersion', 2)
+    if type(harness) is not int or harness not in (2, 3):
+        raise ValueError('Unsupported UI harness version')
     workload = report.get('workload', {})
     if (workload.get('faces') != 100352 or workload.get('percentage') != .5 or
             workload.get('samples') != 1 or workload.get('operatorWarmups') != 0 or
@@ -86,6 +89,15 @@ def validate_ui_report(report, *, host_id, expected_revision):
         raise ValueError('Unexpected native UI workload')
     for phase in ('idle500ms', 'reduce', 'cancelReduceOnFirstWorkerHeartbeat'):
         value = report.get(phase, {})
+        if harness >= 3:
+            renderer = value.get('rendererAtCompletion')
+            if (not isinstance(renderer, dict) or
+                    renderer.get('preference') not in ('auto', 'cpu', 'gpu') or
+                    renderer.get('backend') not in ('CPU', 'CPU fallback', 'GPU (wgpu)', 'wgpu software adapter') or
+                    type(renderer.get('hardwareAccelerated')) is not bool or
+                    renderer['hardwareAccelerated'] != (renderer['backend'] == 'GPU (wgpu)') or
+                    not isinstance(renderer.get('diagnostic'), str)):
+                raise ValueError(f'Missing or inconsistent renderer capability: {phase}')
         elapsed = value.get('operationCompletionMs')
         if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed <= 0:
             raise ValueError(f'Invalid {phase} duration')

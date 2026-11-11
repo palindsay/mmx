@@ -25,6 +25,11 @@ class PackageTests(unittest.TestCase):
             bundle = root / packaging.BUNDLES['linux']
             bundle.mkdir(parents=True)
             (bundle / 'mmx_studio').write_bytes(b'app')
+            (bundle / 'lib').mkdir()
+            (bundle / 'lib/libmmx_gpu.so').write_bytes(b'native-renderer')
+            notices = bundle / 'data/native-licenses'
+            notices.mkdir(parents=True)
+            (notices / 'index.json').write_text('{"packages": []}')
             cli = root / 'packages/mmx_core/mmx-linux.exe'
             cli.parent.mkdir(parents=True)
             cli.write_bytes(b'cli')
@@ -57,6 +62,26 @@ class PackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'clean source tree'):
                     packaging.validate_build_receipt('linux', '0.1.0', require_clean=True)
 
+    def test_receipt_requires_native_renderer_and_dependency_notices(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            bundle = root / packaging.BUNDLES['windows']
+            bundle.mkdir(parents=True)
+            cli = root / 'packages/mmx_core/mmx-windows.exe'
+            cli.parent.mkdir(parents=True)
+            cli.write_bytes(b'cli')
+            with mock.patch.object(packaging, 'ROOT', root):
+                with self.assertRaisesRegex(RuntimeError, 'Native renderer missing'):
+                    packaging.build_input_manifest('windows')
+                (bundle / 'mmx_gpu.dll').write_bytes(b'renderer')
+                with self.assertRaisesRegex(RuntimeError, 'dependency notices missing'):
+                    packaging.build_input_manifest('windows')
+                notices = bundle / 'data/native-licenses'
+                notices.mkdir(parents=True)
+                (notices / 'index.json').write_text('{"packages": []}')
+                files = packaging.build_input_manifest('windows')
+                self.assertTrue(any(name.endswith('mmx_gpu.dll') for name in files))
+
     def test_build_receipt_rejects_repository_only_model_assets(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
@@ -70,7 +95,8 @@ class PackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='mmx signing ') as scratch:
             stage = Path(scratch) / 'stage'
             (stage / 'studio').mkdir(parents=True)
-            for path in (stage / 'mmx.exe', stage / 'studio/mmx_studio.exe'):
+            for path in (stage / 'mmx.exe', stage / 'studio/mmx_studio.exe',
+                         stage / 'studio/mmx_gpu.dll'):
                 path.write_bytes(b'unsigned')
             signed_output = Path(scratch) / 'mmx-0.1.0-windows-signed.exe'
             commands = []
@@ -87,9 +113,10 @@ class PackageTests(unittest.TestCase):
                 packaging.sign_windows_payload(stage)
                 manifest = packaging.tree_manifest(stage)
                 self.assertEqual(manifest['mmx.exe']['sha256'], hashlib.sha256(b'unsigned-signed').hexdigest())
+                self.assertEqual(manifest['studio/mmx_gpu.dll']['sha256'], hashlib.sha256(b'unsigned-signed').hexdigest())
                 result = packaging.native_installer(stage, Path(scratch), 'windows', '0.1.0', 0, sign_windows=True)
             self.assertEqual(result, signed_output)
-            self.assertEqual(len(commands), 3)
+            self.assertEqual(len(commands), 4)
             self.assertIn('/DSigned', commands[-1])
             self.assertIn('/Smmx=$qC:/Program Files/PowerShell/pwsh.exe$q $q-File$q $qC:/source $$test/sign.ps1$q $q-NoChecksum$q -Paths $f', commands[-1])
             self.assertEqual(result.with_suffix('.exe.sha256').read_text(),
@@ -172,10 +199,13 @@ class MacSigningTests(unittest.TestCase):
         self.cli.write_bytes(b'cli')
         app = self.root / packaging.BUNDLES['macos'] / 'mmx_studio.app'
         for relative in ('Contents/MacOS/mmx_studio', 'Contents/Frameworks/Plugin.framework/Plugin',
-                         'Contents/Frameworks/libfixture.dylib'):
+                         'Contents/Frameworks/libmmx_gpu.dylib'):
             path = app / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'code')
+        notices = app / 'Contents/Resources/native-licenses/arm64'
+        notices.mkdir(parents=True)
+        (notices / 'index.json').write_text('{"packages": []}')
         (self.root / 'tool/collect_licenses.py').write_text(
             "from pathlib import Path\nPath(__file__).resolve().parent.parent.joinpath('THIRD_PARTY_LICENSES.txt').write_text('licenses')\n")
         command_dir = self.root / 'fake commands'
@@ -250,6 +280,8 @@ elif name == 'xcrun':
         self.assertTrue(manifest['codeSigned'])
         self.assertEqual(len(manifest['sourceDigest']), 64)
         self.assertEqual(manifest['files']['usr/local/bin/mmx']['sha256'], hashlib.sha256(b'cli-signed').hexdigest())
+        self.assertEqual(manifest['files']['Applications/mmx Studio.app/Contents/Frameworks/libmmx_gpu.dylib']['sha256'],
+                         hashlib.sha256(b'code-signed').hexdigest())
         self.assertEqual(manifest['buildReceiptSha256'], packaging.digest_file(
             payload / 'usr/local/share/mmx/build-receipt.json'))
         verified = subprocess.run([sys.executable, str(Path(__file__).with_name('verify_manifest.py')),

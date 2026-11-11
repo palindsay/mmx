@@ -287,6 +287,7 @@ class PlyIO {
   }
 
   static String writeAscii(TriMesh mesh, {String name = 'mesh'}) {
+    mesh.requireUntextured('PLY export');
     if (mesh.validate().isNotEmpty) {
       throw const FormatException('Invalid PLY geometry');
     }

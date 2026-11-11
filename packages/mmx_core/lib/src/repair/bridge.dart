@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import '../mesh/topology.dart';
 import '../mesh/tri_mesh.dart';
@@ -11,81 +12,110 @@ class Bridge {
   /// Connects two ordered boundary loops. Returns the input unchanged when a
   /// loop has fewer than three vertices.
   static TriMesh bridgeLoops(TriMesh mesh, List<int> loopA, List<int> loopB) {
+    mesh.requireUntextured('Bridge');
     if (loopA.length < 3 || loopB.length < 3) return mesh.clone();
 
-    // Start from the closest vertex pair, keeping the loops' own order.
-    var bestA = 0, bestB = 0;
-    var bestD = double.infinity;
-    for (var i = 0; i < loopA.length; i++) {
-      for (var j = 0; j < loopB.length; j++) {
-        final dx = mesh.vx(loopA[i]) - mesh.vx(loopB[j]);
-        final dy = mesh.vy(loopA[i]) - mesh.vy(loopB[j]);
-        final dz = mesh.vz(loopA[i]) - mesh.vz(loopB[j]);
-        final d = dx * dx + dy * dy + dz * dz;
-        if (d < bestD) {
-          bestD = d;
+    if (loopA.length * loopB.length > 5000000 ||
+        {...loopA, ...loopB}.length != loopA.length + loopB.length ||
+        [...loopA, ...loopB].any((v) => v < 0 || v >= mesh.vertexCount)) {
+      throw ArgumentError(
+          'Bridge requires disjoint simple loops within its comparison budget');
+    }
+    final topo = MeshTopology(mesh);
+    int direction(int a, int b) {
+      final faces = topo.edgeFaces[topo.edgeKey(a, b)];
+      if (faces == null || faces.length != 1) {
+        throw ArgumentError('Bridge loops must follow open boundary edges');
+      }
+      final f = faces.single;
+      for (var k = 0; k < 3; k++) {
+        if (mesh.indices[f * 3 + k] == a &&
+            mesh.indices[f * 3 + (k + 1) % 3] == b) {
+          return 1;
+        }
+      }
+      return -1;
+    }
+
+    List<int> orient(List<int> loop, int wanted) {
+      final forward = direction(loop[0], loop[1]);
+      for (var i = 1; i < loop.length; i++) {
+        if (direction(loop[i], loop[(i + 1) % loop.length]) != forward) {
+          throw StateError(
+              'Repair inconsistent boundary winding before bridging');
+        }
+      }
+      return forward == wanted ? List<int>.from(loop) : loop.reversed.toList();
+    }
+
+    // Existing A edges run forward; B runs backward. The new strip reverses
+    // every existing boundary edge and uses opposite directions internally.
+    var a = orient(loopA, 1), b = orient(loopB, -1);
+    var bestA = 0, bestB = 0, bestD = double.infinity;
+    for (var i = 0; i < a.length; i++) {
+      for (var j = 0; j < b.length; j++) {
+        final distance = _dist(mesh, a[i], b[j]);
+        if (distance < bestD) {
+          bestD = distance;
           bestA = i;
           bestB = j;
         }
       }
     }
-
-    final a = <int>[
-      for (var k = 0; k < loopA.length; k++) loopA[(bestA + k) % loopA.length]
-    ];
-    final b = <int>[
-      for (var k = 0; k < loopB.length; k++) loopB[(bestB + k) % loopB.length]
-    ];
-    // Reverse B so the two loops run in opposite directions.
-    final br = b.reversed.toList();
-
-    TriMesh build(bool flip) {
-      final builder = MeshBuilder();
-      for (var v = 0; v < mesh.vertexCount; v++) {
-        builder.addVertex(mesh.vx(v), mesh.vy(v), mesh.vz(v));
+    a = [for (var k = 0; k < a.length; k++) a[(bestA + k) % a.length]];
+    b = [for (var k = 0; k < b.length; k++) b[(bestB + k) % b.length]];
+    final indices = <int>[...mesh.indices];
+    var i = 0, j = 0;
+    while (i < a.length || j < b.length) {
+      final av = a[i % a.length], bv = b[j % b.length];
+      final an = a[(i + 1) % a.length], bn = b[(j + 1) % b.length];
+      final da = _dist(mesh, an, bv), db = _dist(mesh, av, bn);
+      // Compare proposed diagonals. Do not close one ring while the other has
+      // not advanced: that creates a pinched fan with a non-manifold seam.
+      final advanceA = j == b.length ||
+          (i < a.length &&
+              !(i == a.length - 1 && j == 0) &&
+              ((j == b.length - 1 && i == 0) ||
+                  da < db ||
+                  (da == db && i / a.length <= j / b.length)));
+      if (advanceA) {
+        indices.addAll([av, bv, an]);
+        i++;
+      } else {
+        indices.addAll([av, bv, bn]);
+        j++;
       }
-      for (var f = 0; f < mesh.faceCount; f++) {
-        builder.addTriangle(mesh.indices[f * 3], mesh.indices[f * 3 + 1],
-            mesh.indices[f * 3 + 2]);
+    }
+    final out = mesh.clone()..indices = Uint32List.fromList(indices);
+    if (mesh.faceGroups != null) {
+      out.faceGroups = Uint16List.fromList(
+          [...mesh.faceGroups!, ...List<int>.filled(a.length + b.length, 0)]);
+    }
+    for (var f = mesh.faceCount; f < out.faceCount; f++) {
+      final a = out.indices[f * 3],
+          b = out.indices[f * 3 + 1],
+          c = out.indices[f * 3 + 2];
+      final ux = out.vx(b) - out.vx(a),
+          uy = out.vy(b) - out.vy(a),
+          uz = out.vz(b) - out.vz(a);
+      final vx = out.vx(c) - out.vx(a),
+          vy = out.vy(c) - out.vy(a),
+          vz = out.vz(c) - out.vz(a);
+      final x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+      if (x * x + y * y + z * z == 0) {
+        throw StateError('Bridge would create a degenerate triangle');
       }
-      var i = 0, j = 0;
-      while (i < a.length || j < br.length) {
-        final aNext = a[(i + 1) % a.length];
-        final bNext = br[(j + 1) % br.length];
-        final da = _dist(mesh, a[i % a.length], aNext);
-        final db = _dist(mesh, br[j % br.length], bNext);
-        if (j >= br.length || (i < a.length && da <= db)) {
-          final t0 = a[i % a.length], t1 = br[j % br.length];
-          if (flip) {
-            builder.addTriangle(t0, aNext, t1);
-          } else {
-            builder.addTriangle(t0, t1, aNext);
-          }
-          i++;
-        } else {
-          final t0 = a[i % a.length], t1 = br[j % br.length];
-          if (flip) {
-            builder.addTriangle(t0, bNext, t1);
-          } else {
-            builder.addTriangle(t0, t1, bNext);
-          }
-          j++;
+    }
+    final after = MeshTopology(out);
+    for (final loop in [a, b]) {
+      for (var k = 0; k < loop.length; k++) {
+        if (after.edgeFaces[after.edgeKey(loop[k], loop[(k + 1) % loop.length])]
+                ?.length !=
+            2) {
+          throw StateError('Bridge did not close the requested boundary');
         }
-        if (i >= a.length && j >= br.length) break;
-      }
-      return builder.build();
-    }
-
-    var out = build(false);
-    if (MeshTopology(out).boundaryEdges().isNotEmpty) {
-      final flipped = build(true);
-      if (MeshTopology(flipped).boundaryEdges().length <
-          MeshTopology(out).boundaryEdges().length) {
-        out = flipped;
       }
     }
-    out.removeDegenerateFaces();
-    out.compact();
     return out;
   }
 

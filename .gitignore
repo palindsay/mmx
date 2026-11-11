@@ -35,3 +35,4 @@ packages/*/pubspec.lock
 __pycache__/
 
 /analytical-corpus.json
+/gpu-*.json

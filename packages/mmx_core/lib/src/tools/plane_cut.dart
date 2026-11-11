@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import '../mesh/tri_mesh.dart';
 import '../repair/holes.dart';
+import '../mesh/topology.dart';
+import '../geom/planar_region.dart';
 
 /// Plane cutting and slicing.
 ///
@@ -19,9 +21,16 @@ class PlaneCut {
     HoleFillMode fillMode = HoleFillMode.flatMinimal,
     bool sliceBoth = false,
   }) {
+    if (point.length != 3 ||
+        normal.length != 3 ||
+        [...point, ...normal].any((v) => !v.isFinite)) {
+      throw ArgumentError(
+          'Plane must have finite three-dimensional point and normal');
+    }
+    mesh.requireUntextured('Plane cut');
     final nx = normal[0], ny = normal[1], nz = normal[2];
     final nl = math.sqrt(nx * nx + ny * ny + nz * nz);
-    if (nl < 1e-12) return mesh;
+    if (nl < 1e-12) throw ArgumentError('Plane normal must be nonzero');
     final ux = nx / nl, uy = ny / nl, uz = nz / nl;
     final px = point[0], py = point[1], pz = point[2];
     final sign = keepPositive ? 1.0 : -1.0;
@@ -89,7 +98,41 @@ class PlaneCut {
     out.removeDegenerateFaces(
         minArea: mesh.bounds().diagonal * mesh.bounds().diagonal * 1e-16);
     out.compact();
-    if (fill) out = HoleFiller.fill(out, mode: fillMode);
+    if (fill) {
+      // Only cap boundaries produced on this plane. Existing scan holes away
+      // from the cut remain open; nested contours describe cavities, not disks.
+      final topology = MeshTopology(out);
+      final loops = topology
+          .boundaryLoops()
+          .where((loop) => loop.every((v) =>
+              ((out.vx(v) - px) * ux +
+                      (out.vy(v) - py) * uy +
+                      (out.vz(v) - pz) * uz)
+                  .abs() <=
+              math.max(eps * 128, out.bounds().diagonal * 2e-7)))
+          .toList();
+      if (loops.isNotEmpty) {
+        final cap = triangulatePlanarRegion(
+            out.positions, loops, [-sign * ux, -sign * uy, -sign * uz]);
+        out.indices = Uint32List.fromList([...out.indices, ...cap]);
+        if (out.faceGroups != null) {
+          out.faceGroups = Uint16List.fromList(
+              [...out.faceGroups!, ...List<int>.filled(cap.length ~/ 3, 0)]);
+        }
+        final after = MeshTopology(out);
+        for (final loop in loops) {
+          for (var i = 0; i < loop.length; i++) {
+            if (after
+                    .edgeFaces[
+                        after.edgeKey(loop[i], loop[(i + 1) % loop.length])]
+                    ?.length !=
+                2) {
+              throw StateError('Cut cap did not close its boundary');
+            }
+          }
+        }
+      }
+    }
     if (sliceBoth) {
       final other = cut(mesh,
           point: point,

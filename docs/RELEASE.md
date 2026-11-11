@@ -15,24 +15,39 @@ Apple makes sandboxing optional for notarized direct distribution; see
 ## Verification and packaging
 
 The `CI` workflow runs formatting, analyzers, kernel/widget tests, a real desktop
-integration workflow, and native installer install/uninstall checks on each OS.
-Linux additionally enforces critical IO coverage. Test failures block packaging.
+integration workflow suite, and native installer install/uninstall checks on each OS.
+Linux additionally enforces critical IO and scan-workflow coverage. Test failures block packaging.
 Installer checks run on disposable CI runners, never on a contributor workstation.
+Native builds require pinned Rust 1.99.1 and Python 3.11+; platform build hooks embed
+the wgpu library and transitive dependency license texts. See the
+[renderer build guide](../apps/mmx_studio/native_renderer/README.md).
 
-From a matching build host:
+For local optimized builds, the root Makefile wraps `tool/build.py`: `make build`
+builds Dart AOT plus Flutter/Rust release binaries, `make test` verifies the Dart
+packages, and `make package` builds and collects portable archives, inventories,
+licenses and build receipts. `make native-package` also invokes the unsigned
+native installer builder. Python 3.11+ is required. These local commands do not
+replace native integration or signing acceptance. See [Quick start](../QUICKSTART.md).
+
+For a Linux review package, run from the repository root:
 
 ```sh
-./tool/verify.sh
-# From apps/mmx_studio; use -d windows or -d macos on those hosts:
-xvfb-run -a flutter test integration_test -d linux
-flutter build linux --release
-# From packages/mmx_core:
-dart compile exe bin/mmx.dart -o mmx-linux.exe
-# From repository root:
-python3 tool/package_release.py linux --record-build
-python3 tool/collect_licenses.py
-python3 tool/package_release.py linux --native
+make test
+(
+  cd apps/mmx_studio
+  for test_file in integration_test/*_test.dart; do
+    xvfb-run -a flutter test "$test_file" -d linux || exit 1
+  done
+)
+make native-package
 ```
+
+On Windows/macOS, run `python tool/build.py --verify`, run each integration file
+from Studio using a separate `flutter test FILE -d windows` / `-d macos` process
+without Xvfb, then run `python tool/build.py --package --native` from the root
+(use `py -3` or `python3` for the installed Python command). The helper builds,
+stages, records receipts, collects inventories/licenses and packages. Follow the
+Windows runtime setup below in the same packaging environment first.
 
 Windows packaging requires the Inno Setup compiler in `ISCC_PATH`. macOS uses
 `pkgbuild`; Linux uses `dpkg-deb`. Each platform also gets a portable archive.
@@ -42,6 +57,9 @@ for native `.deb`, `.pkg`, or Windows installer `.exe` files.
 Immediately after building the CLI and desktop app, record their source and
 binary hashes with `python tool/package_release.py PLATFORM --record-build`.
 Packaging requires that receipt and rejects changed source or build outputs.
+The Make/Python build helper records it automatically when packaging. Any later
+source change, including documentation, requires a rebuild and fresh receipt;
+do not relabel binaries built from an earlier working tree as a new commit.
 Signing additionally requires a clean checkout and clean build receipt. Retain
 `bin/build-receipts/PLATFORM.json` with the exact build inputs when transferring
 them to a signing host. This records the build association; it does not prove
@@ -70,7 +88,7 @@ The install checks verify every declared file hash and symlink against the
 installed payload. macOS regenerates its manifest for installed filesystem paths
 and includes the same inventories as the portable package.
 
-The app starts with our procedural geometry. Packaging rejects accidentally
+The app starts with an empty project. Packaging rejects accidentally
 bundled repository-only Autodesk model assets. Source fixtures and research
 references retain their attribution in `NOTICE`; they are not binary assets.
 

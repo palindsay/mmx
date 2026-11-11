@@ -79,7 +79,7 @@ void main() {
         ProjectIO.write(ProjectData([SceneObject(1, 'test', triangle())])));
     final manifest =
         jsonDecode(utf8.decode(entries.first.data)) as Map<String, dynamic>;
-    manifest['version'] = 2;
+    manifest['version'] = 4;
     entries[0] = ZipEntry(
         'manifest.json', Uint8List.fromList(utf8.encode(jsonEncode(manifest))));
     expect(
@@ -161,18 +161,20 @@ void main() {
         throwsA(isA<FileSystemException>()));
     expect(await File(path).readAsBytes(), [2]);
   });
-  test('CLI rejects malformed invocations with usage exit code', () async {
-    for (final args in [
-      ['info'],
-      ['reduce', 'a', 'b', '--percent', 'NaN'],
-      ['render', 'a', 'b', '--width', '999999'],
-      ['wat'],
-      ['flip', 'a', 'b', '--unknown']
-    ]) {
+  // Each real CLI launch gets its own test deadline. Cold Dart startup on
+  // shared native runners can exhaust a single deadline for the entire list.
+  for (final args in [
+    ['info'],
+    ['reduce', 'a', 'b', '--percent', 'NaN'],
+    ['render', 'a', 'b', '--width', '999999'],
+    ['wat'],
+    ['flip', 'a', 'b', '--unknown']
+  ]) {
+    test('CLI rejects ${args.join(' ')} with usage exit code', () async {
       final r = await Process.run(
           Platform.resolvedExecutable, ['run', 'bin/mmx.dart', ...args]);
       expect(r.exitCode, 2, reason: '$args: ${r.stderr}');
       expect(r.stderr, isNot(contains('Unhandled exception')));
-    }
-  });
+    });
+  }
 }

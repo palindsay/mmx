@@ -574,6 +574,7 @@ class MixIO {
   }
 
   static Uint8List _meshBlock(TriMesh mesh) {
+    mesh.requireUntextured('MIX export');
     if (mesh.validate().isNotEmpty ||
         mesh.vertexCount > 2000000 ||
         mesh.faceCount > 4000000) {

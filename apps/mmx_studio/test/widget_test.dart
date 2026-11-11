@@ -16,7 +16,7 @@ void main() {
   testWidgets('UI state drives a kernel operator end to end', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       // Wait for the startup model to load and render.
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -52,7 +52,7 @@ void main() {
   testWidgets('mirror operator is wired through app state', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
@@ -88,7 +88,7 @@ void main() {
   testWidgets('flip normals and measure run through app state', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
@@ -110,7 +110,7 @@ void main() {
   testWidgets('stamp runs through app state', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
@@ -128,7 +128,7 @@ void main() {
   testWidgets('align to target runs through app state', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
@@ -148,7 +148,7 @@ void main() {
   testWidgets('mix scene import loads mesh objects', (tester) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
@@ -165,7 +165,7 @@ void main() {
   });
 
   testWidgets('touch pinch gesture zooms the camera', (tester) async {
-    final state = StudioState();
+    final state = StudioState(loadStartup: true);
     final before = state.camera.distance;
     final first = TestPointer(1, PointerDeviceKind.touch);
     final second = TestPointer(2, PointerDeviceKind.touch);
@@ -192,7 +192,7 @@ void main() {
   ) async {
     late StudioState state;
     await tester.runAsync(() async {
-      state = StudioState();
+      state = StudioState(loadStartup: true);
       for (var i = 0; i < 100 && state.selected == null; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }

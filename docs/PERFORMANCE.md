@@ -183,5 +183,6 @@ identified that case. Comparing against the legacy report produced exit status
 2. All 13 comparator/CLI/topology tests passed; targeted analysis was clean.
 The largest process-lifetime RSS was 236.6 MiB in the baseline and 194.0 MiB
 in the candidate. Identical code and launch/allocation variability mean this
-is not evidence of a memory optimization. Windows/macOS captures and
-representative memory budgets remain unmeasured.
+is not evidence of a memory optimization. This historical pair covers Linux only.
+New [native renderer measurements](performance/NATIVE-RENDERER.md) retain hardware
+and hosted software-adapter observations. Release-host budgets remain pending.

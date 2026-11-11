@@ -43,9 +43,11 @@ void main() {
         false);
   });
   test(
-      'Make Solid rejects unsupported minimum thickness rather than pretending to enforce it',
+      'Fast Make Solid rejects minimum clearance incompatible with reprojection',
       () {
-    expect(() => Solidifier.makeSolid(analyticCube(), minThickness: .5),
+    expect(
+        () => Solidifier.makeSolid(analyticCube(),
+            minThickness: .5, mode: SolidMode.fast),
         throwsUnsupportedError);
     expect(() => Solidifier.makeSolid(analyticCube(), offset: double.nan),
         throwsArgumentError);

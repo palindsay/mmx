@@ -5,8 +5,6 @@ import '../mesh/topology.dart';
 import '../mesh/attributes.dart';
 import '../mesh/limits.dart';
 import '../mesh/tri_mesh.dart';
-import '../repair/holes.dart';
-import '../repair/inspector.dart';
 import '../repair/weld.dart';
 import '../spatial/bvh.dart';
 import 'collapse_mesh.dart';
@@ -40,6 +38,8 @@ class IsotropicRemesher {
     final positions = <double>[...input.positions];
     final indices = <int>[];
     final groups = input.faceGroups == null ? null : <int>[];
+    final uvs = input.cornerUvs == null ? null : <double>[];
+    final materialIds = input.faceMaterials == null ? null : <int>[];
     final colors =
         input.vertexColors == null ? null : <double>[...input.vertexColors!];
     final mids = <String, int>{};
@@ -70,6 +70,41 @@ class IsotropicRemesher {
       final bc = mid(b, c);
       final ca = mid(c, a);
       indices.addAll([a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+      if (uvs != null) {
+        final corners = [
+          for (var k = 0; k < 3; k++)
+            [
+              input.cornerUvs![f * 6 + k * 2],
+              input.cornerUvs![f * 6 + k * 2 + 1]
+            ]
+        ];
+        final mids = [
+          for (var k = 0; k < 3; k++)
+            [
+              for (var c = 0; c < 2; c++)
+                (corners[k][c] + corners[(k + 1) % 3][c]) * .5
+            ]
+        ];
+        for (final uv in [
+          corners[0],
+          mids[0],
+          mids[2],
+          mids[0],
+          corners[1],
+          mids[1],
+          mids[2],
+          mids[1],
+          corners[2],
+          mids[0],
+          mids[1],
+          mids[2]
+        ]) {
+          uvs.addAll(uv);
+        }
+      }
+      if (materialIds != null) {
+        materialIds.addAll(List.filled(4, input.faceMaterials![f]));
+      }
       if (groups != null) {
         final g = input.faceGroups![f];
         groups.addAll([g, g, g, g]);
@@ -80,6 +115,10 @@ class IsotropicRemesher {
       Uint32List.fromList(indices),
       faceGroups: groups == null ? null : Uint16List.fromList(groups),
       vertexColors: colors == null ? null : Float32List.fromList(colors),
+      cornerUvs: uvs == null ? null : Float32List.fromList(uvs),
+      faceMaterials:
+          materialIds == null ? null : Uint16List.fromList(materialIds),
+      materials: input.materials,
     );
   }
 
@@ -133,6 +172,7 @@ class IsotropicRemesher {
     void Function(int done, int total)? progress,
     int maximumFaces = defaultMaximumGeneratedFaces,
   }) {
+    input.requireUntextured('Isotropic remesh');
     if (!targetEdgeLength.isFinite ||
         targetEdgeLength <= 0 ||
         iterations < 0 ||
@@ -186,6 +226,7 @@ class IsotropicRemesher {
       }
       mesh = _splitLong(mesh, targetEdgeLength * 4.0 / 3.0,
           maximumFaces: maximumFaces,
+          preserveBoundary: preserveBoundary,
           maxFor: curvSplit == null
               ? null
               : (a, b) =>
@@ -220,23 +261,14 @@ class IsotropicRemesher {
     progress?.call(iterations, iterations);
     mesh.removeDegenerateFaces();
     mesh.compact();
-    if (adaptiveDensity > 0) {
-      Weld.removeDuplicateFaces(mesh);
-      for (var pass = 0; pass < 3; pass++) {
-        var changed = false;
-        if (MeshTopology(mesh).boundaryLoops().isNotEmpty) {
-          mesh = HoleFiller.fill(mesh, mode: HoleFillMode.flatMinimal);
-          changed = true;
-        }
-        if (MeshTopology(mesh).nonManifoldEdges().isNotEmpty) {
-          mesh = MeshInspector.splitNonManifold(mesh);
-          changed = true;
-        }
-        if (!changed) break;
-      }
-    }
+    if (adaptiveDensity > 0) Weld.removeDuplicateFaces(mesh);
+    final outputTopology = MeshTopology(mesh);
+    final inputTopology = MeshTopology(input);
     if (adaptiveDensity > 0 &&
-        MeshTopology(mesh).nonManifoldEdges().isNotEmpty) {
+        (outputTopology.nonManifoldEdges().isNotEmpty ||
+            inputTopology.nonManifoldEdges().isNotEmpty ||
+            (inputTopology.boundaryEdges().isEmpty &&
+                outputTopology.boundaryEdges().isNotEmpty))) {
       // The angle-defect density heuristic can create non-manifold junctions
       // on aggressive settings. Fall back to the uniform pass, which is
       // topology-safe, rather than returning a non-manifold result.
@@ -421,12 +453,15 @@ class IsotropicRemesher {
   /// Splits every edge longer than [maxLen]. Handles faces with one, two or
   /// three long edges so the result stays conforming.
   static TriMesh _splitLong(TriMesh mesh, double maxLen,
-      {double Function(int, int)? maxFor, required int maximumFaces}) {
+      {double Function(int, int)? maxFor,
+      required int maximumFaces,
+      bool preserveBoundary = false}) {
     final midCache = <int, int>{};
     final n = mesh.vertexCount;
     final topo = MeshTopology(mesh);
     final splitEdges = <int>{};
     for (final key in topo.edgeFaces.keys) {
+      if (preserveBoundary && topo.edgeFaces[key]!.length == 1) continue;
       final a = key ~/ n, b = key % n;
       if (_len(mesh, a, b) > (maxFor?.call(a, b) ?? maxLen)) {
         splitEdges.add(key);
@@ -532,7 +567,11 @@ class IsotropicRemesher {
       TriMesh mesh, double minLen, bool preserveBoundary, Set<int> sharp,
       {double Function(int, int)? minFor}) {
     final state = CollapseMesh(mesh);
-    final pinned = <int>{...sharp};
+    final pinned = <int>{
+      ...sharp,
+      if (preserveBoundary)
+        for (final e in MeshTopology(mesh).boundaryEdges()) ...e.take(2)
+    };
     final n = mesh.vertexCount;
     final edges = state.edgeCount.keys.toList()
       ..sort((a, b) {

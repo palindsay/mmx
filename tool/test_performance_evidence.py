@@ -54,6 +54,22 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.validate(report)
 
+    def test_renderer_evidence_distinguishes_software_and_hardware(self):
+        report = ui_report()
+        report['provenance']['harnessVersion'] = 3
+        with self.assertRaisesRegex(ValueError, 'renderer capability'):
+            self.validate(report)
+        for phase in ('idle500ms', 'reduce', 'cancelReduceOnFirstWorkerHeartbeat'):
+            report[phase]['rendererAtCompletion'] = {
+                'preference': 'auto', 'backend': 'wgpu software adapter',
+                'hardwareAccelerated': False, 'diagnostic': 'software Vulkan'}
+        self.validate(report)
+        report['reduce']['rendererAtCompletion']['hardwareAccelerated'] = True
+        with self.assertRaisesRegex(ValueError, 'renderer capability'):
+            self.validate(report)
+        report['reduce']['rendererAtCompletion']['backend'] = 'GPU (wgpu)'
+        self.validate(report)
+
     def test_stale_or_fabricated_interval_summaries_are_rejected(self):
         for invalid in (float('nan'), 99, None, True):
             report = ui_report()

@@ -3,7 +3,7 @@ description: "Cross-platform mesh studio (Meshmixer-class) built on mmx_core."
 repository: https://github.com/palindsay/mmx
 issue_tracker: https://github.com/palindsay/mmx/issues
 publish_to: 'none'
-version: 0.2.0+1
+version: 0.3.0+1
 
 environment:
   sdk: ^3.13.0

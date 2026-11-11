@@ -131,6 +131,7 @@ class StlIO {
   }
 
   static Uint8List writeBinary(TriMesh mesh) {
+    mesh.requireUntextured('STL export');
     if (mesh.validate().isNotEmpty) {
       throw const FormatException('Invalid STL geometry');
     }
@@ -180,6 +181,7 @@ class StlIO {
   }
 
   static String writeAscii(TriMesh mesh, {String name = 'mmx_core'}) {
+    mesh.requireUntextured('STL export');
     if (mesh.validate().isNotEmpty) {
       throw const FormatException('Invalid STL geometry');
     }

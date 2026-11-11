@@ -43,6 +43,7 @@ class _StudioScreenState extends State<StudioScreen> {
   bool _savingRecovery = false;
   Future<void>? _recoveryTask;
   bool _exitPending = false;
+  bool _projectTransitionPending = false;
 
   Future<void> _initializeRecovery() async {
     try {
@@ -111,7 +112,9 @@ class _StudioScreenState extends State<StudioScreen> {
       }
       if (!mounted) return;
       _autosave = Timer.periodic(const Duration(seconds: 30), (_) async {
-        if (_savingRecovery || _exitPending) return;
+        if (_savingRecovery || _exitPending || _projectTransitionPending) {
+          return;
+        }
         _savingRecovery = true;
         try {
           _recoveryTask = store.withPath(state.autosave);
@@ -129,12 +132,12 @@ class _StudioScreenState extends State<StudioScreen> {
     }
   }
 
-  Future<void> _clearRecovery({
+  Future<bool> _clearRecovery({
     int? expectedRevision,
     bool allowDirty = false,
   }) async {
     final store = _recovery;
-    if (store == null) return;
+    if (store == null) return true;
     final revision = expectedRevision ?? state.doc.revision;
     bool stillSafeToClear() =>
         state.doc.revision == revision &&
@@ -143,14 +146,18 @@ class _StudioScreenState extends State<StudioScreen> {
     try {
       // Queue cleanup behind this session's writes, then recheck whether the
       // user has made a newer edit while a prior recovery write was settling.
-      await store.withPath((path) async {
-        if (!stillSafeToClear()) return;
+      return await store.withPath((path) async {
+        if (!stillSafeToClear()) return false;
         final file = File(path);
-        if (await file.exists() && stillSafeToClear()) await file.delete();
+        final exists = await file.exists();
+        if (!stillSafeToClear()) return false;
+        if (exists) await file.delete();
+        return true;
       });
     } catch (e) {
       state.status = 'Recovery cleanup failed: $e';
       state.notify();
+      return false;
     }
   }
 
@@ -164,15 +171,26 @@ class _StudioScreenState extends State<StudioScreen> {
     }
   }
 
-  Future<bool> _confirmDiscard() async {
+  Future<bool> _confirmDiscard({String? before}) async {
+    if (state.scanPreview != null) {
+      state.status =
+          'Apply or cancel the scan preview before changing projects';
+      state.notify();
+      return false;
+    }
     if (state.interactionLocked) return false;
     if (!state.dirty) return true;
     final revision = state.doc.revision;
     final answer = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Save changes?'),
-        content: const Text('This project has unsaved changes.'),
+        title: Text(
+          before == null ? 'Save changes?' : 'Save changes before $before?',
+        ),
+        content: Text(
+          'Your changes to ${state.projectPath == null ? 'this untitled project' : '“${state.projectPath!.split(RegExp(r'[/\\]')).last}”'} '
+          'will be lost if you discard them.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, 'cancel'),
@@ -183,6 +201,7 @@ class _StudioScreenState extends State<StudioScreen> {
             child: const Text('Discard'),
           ),
           FilledButton(
+            autofocus: true,
             onPressed: () => Navigator.pop(context, 'save'),
             child: const Text('Save'),
           ),
@@ -203,7 +222,9 @@ class _StudioScreenState extends State<StudioScreen> {
     if (widget.enableRecovery) _initializeRecovery();
     _lifecycle = AppLifecycleListener(
       onExitRequested: () async {
-        if (_exitPending) return AppExitResponse.cancel;
+        if (_exitPending || _projectTransitionPending) {
+          return AppExitResponse.cancel;
+        }
         _exitPending = true;
         final revision = state.doc.revision;
         try {
@@ -265,6 +286,12 @@ class _StudioScreenState extends State<StudioScreen> {
               meta: useMeta,
             ): () =>
                 state.redo(),
+            SingleActivator(
+              LogicalKeyboardKey.keyN,
+              control: !useMeta,
+              meta: useMeta,
+            ): () =>
+                _newProject(),
             SingleActivator(
               LogicalKeyboardKey.keyO,
               control: !useMeta,
@@ -347,31 +374,68 @@ class _StudioScreenState extends State<StudioScreen> {
                     ),
                   PopupMenuButton<String>(
                     tooltip: 'Project',
-                    icon: const Icon(Icons.more_vert, semanticLabel: 'Project'),
                     enabled: !state.interactionLocked,
                     onSelected: (action) async {
+                      if (action == 'new') await _newProject();
                       if (action == 'save') await _saveProject();
                       if (action == 'saveAs') await _saveProject(saveAs: true);
                       if (action == 'open') await _openProject();
                       if (action == 'transform') await _transform();
                       if (action == 'boolean') await _boolean();
                     },
-                    itemBuilder: (_) => const [
+                    itemBuilder: (_) => [
                       PopupMenuItem(
+                        value: 'new',
+                        child: Row(
+                          children: [
+                            const Expanded(child: Text('New project')),
+                            const SizedBox(width: 12),
+                            Text(
+                              useMeta ? '⌘N' : 'Ctrl+N',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
                         value: 'open',
                         child: Text('Open project…'),
                       ),
-                      PopupMenuItem(value: 'save', child: Text('Save project')),
-                      PopupMenuItem(
+                      const PopupMenuItem(
+                        value: 'save',
+                        child: Text('Save project'),
+                      ),
+                      const PopupMenuItem(
                         value: 'saveAs',
                         child: Text('Save project as…'),
                       ),
-                      PopupMenuItem(
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
                         value: 'transform',
                         child: Text('Transform selected…'),
                       ),
-                      PopupMenuItem(value: 'boolean', child: Text('Boolean…')),
+                      const PopupMenuItem(
+                        value: 'boolean',
+                        child: Text('Boolean…'),
+                      ),
                     ],
+                    child: Semantics(
+                      button: true,
+                      enabled: !state.interactionLocked,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Opacity(
+                          opacity: state.interactionLocked ? 0.38 : 1,
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Project'),
+                              Icon(Icons.arrow_drop_down, size: 18),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                   IconButton(
                     tooltip: 'Undo',
@@ -440,7 +504,19 @@ class _StudioScreenState extends State<StudioScreen> {
                         absorbing: state.interactionLocked,
                         child: LeftRail(state: state),
                       ),
-                      Expanded(child: MeshViewport(state: state)),
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            MeshViewport(state: state),
+                            if (state.doc.objects.isEmpty && !state.busy)
+                              _EmptyProject(
+                                onImport: () => _showImport(context),
+                                onOpen: _openProject,
+                              ),
+                          ],
+                        ),
+                      ),
                       if (!compact)
                         AbsorbPointer(
                           absorbing: state.interactionLocked,
@@ -611,9 +687,38 @@ class _StudioScreenState extends State<StudioScreen> {
     }
   }
 
-  Future<void> _openProject() async {
-    if (!await _confirmDiscard()) return;
+  Future<void> _newProject() async {
+    if (_projectTransitionPending || _exitPending || state.interactionLocked) {
+      return;
+    }
+    _projectTransitionPending = true;
     try {
+      if (!await _confirmDiscard(before: 'starting a new project') ||
+          !mounted) {
+        return;
+      }
+      final revision = state.doc.revision;
+      // Drain old autosaves before discarding their document. A failed cleanup
+      // or an intervening edit keeps the current project available to the user.
+      if (!await _clearRecovery(expectedRevision: revision, allowDirty: true)) {
+        return;
+      }
+      if (!mounted ||
+          state.doc.revision != revision ||
+          state.interactionLocked) {
+        return;
+      }
+      await state.newProject();
+    } finally {
+      _projectTransitionPending = false;
+    }
+  }
+
+  Future<void> _openProject() async {
+    if (_projectTransitionPending || _exitPending) return;
+    _projectTransitionPending = true;
+    try {
+      if (!await _confirmDiscard() || !mounted) return;
       final file = await openFile(
         initialDirectory: _lastDirectory,
         acceptedTypeGroups: [
@@ -629,6 +734,8 @@ class _StudioScreenState extends State<StudioScreen> {
     } catch (e) {
       state.status = 'Open failed: $e';
       state.notify();
+    } finally {
+      _projectTransitionPending = false;
     }
   }
 
@@ -781,4 +888,62 @@ class _StudioScreenState extends State<StudioScreen> {
     );
     if (apply == true) await state.doBoolean(target, op, precise: precise);
   }
+}
+
+class _EmptyProject extends StatelessWidget {
+  final VoidCallback onImport;
+  final VoidCallback onOpen;
+  const _EmptyProject({required this.onImport, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Material(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.create_new_folder_outlined, size: 32),
+                const SizedBox(height: 12),
+                Text(
+                  'Empty project',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Import a mesh to begin, or open an existing .mmx project.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      key: const ValueKey('empty-project-import'),
+                      onPressed: onImport,
+                      icon: const Icon(Icons.file_open_outlined),
+                      label: const Text('Import mesh…'),
+                    ),
+                    TextButton(
+                      key: const ValueKey('empty-project-open'),
+                      onPressed: onOpen,
+                      child: const Text('Open project…'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }

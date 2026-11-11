@@ -152,6 +152,12 @@ class _UiProbe {
       'finalPostFrameTailMs': (elapsed - _lastFrame) / 1000,
       'sampledPeakProcessRssBytes': sampledPeakRss,
       'processHighWaterRssBytes': ProcessInfo.maxRss,
+      'rendererAtCompletion': {
+        'preference': state.renderBackendPreference.name,
+        'backend': state.renderBackend,
+        'hardwareAccelerated': state.hardwareAccelerated,
+        'diagnostic': state.renderDiagnostic,
+      },
     };
   }
 }
@@ -259,7 +265,7 @@ void main() {
       final report = <String, Object?>{
         'schemaVersion': 2,
         'recordedAtUtc': DateTime.now().toUtc().toIso8601String(),
-        'provenance': {'gitRevision': _revision, 'harnessVersion': 2},
+        'provenance': {'gitRevision': _revision, 'harnessVersion': 3},
         'host': {
           'id': _hostId,
           'os': Platform.operatingSystem,
@@ -278,6 +284,7 @@ void main() {
           'framePolicy': 'fullyLive',
           'viewportLogicalPixels': [state.frameWidth, state.frameHeight],
           'devicePixelRatio': tester.view.devicePixelRatio,
+          'rendererPreference': state.renderBackendPreference.name,
         },
         'workload': {
           'generator':

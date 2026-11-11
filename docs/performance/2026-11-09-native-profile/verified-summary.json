@@ -1,0 +1,177 @@
+{
+  "captureDirectory": "/tmp/mmx-ui-final-3e23a87c",
+  "context": {
+    "schema": 1,
+    "startedAtUtc": "2026-11-09T23:34:48.394073+00:00",
+    "gitRevision": "3e23a87c5ab1d8a185153dfb3fe3748b9997a4c9",
+    "gitStatus": "",
+    "environment": "local-observational",
+    "platform": "linux",
+    "runnerLabel": "local",
+    "hostId": "local-ryzen7950x-rtx5090",
+    "system": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "architecture": "x86_64",
+    "github": {
+      "GITHUB_REPOSITORY": null,
+      "GITHUB_RUN_ID": null,
+      "GITHUB_RUN_ATTEMPT": null,
+      "GITHUB_SHA": null,
+      "GITHUB_EVENT_NAME": null,
+      "RUNNER_OS": null,
+      "RUNNER_ARCH": null,
+      "ImageOS": null,
+      "ImageVersion": null
+    },
+    "uiCapturesRequested": 3,
+    "releaseAcceptance": "pending-designated-hosts-and-approved-budgets",
+    "errors": [],
+    "uiCapturesCompleted": 3,
+    "completedAtUtc": "2026-11-09T23:35:26.157034+00:00",
+    "status": "captured"
+  },
+  "verifiedFiles": 10,
+  "captures": 3,
+  "runtime": {
+    "declaredToolchain": "Flutter-3.47.9",
+    "dart": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"linux_x64\"",
+    "buildMode": "profile",
+    "framePolicy": "fullyLive",
+    "viewportLogicalPixels": [
+      892,
+      674
+    ],
+    "devicePixelRatio": 2.0,
+    "rendererPreference": "auto"
+  },
+  "host": {
+    "id": "local-ryzen7950x-rtx5090",
+    "os": "linux",
+    "osVersion": "Linux 7.0.0-42-generic #42-Ubuntu SMP PREEMPT_DYNAMIC Thu Oct 15 08:06:44 UTC 2026",
+    "abi": "linux_x64",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "logicalProcessors": 32,
+    "displayEnvironment": ":0"
+  },
+  "harnessVersion": 3,
+  "workload": {
+    "generator": "periodic torus 224x224, major radius 20, minor radius 5",
+    "vertices": 50176,
+    "faces": 100352,
+    "fnv1a32LittleEndianMeshBytes": "efae274e",
+    "operator": "StudioState.doReduce / Decimator.reduce",
+    "percentage": 0.5,
+    "outputFaces": 50176,
+    "samples": 1,
+    "operatorWarmups": 0
+  },
+  "rendererByPhase": {
+    "idle500ms": [
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      }
+    ],
+    "reduce": [
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      }
+    ],
+    "cancelReduceOnFirstWorkerHeartbeat": [
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      },
+      {
+        "preference": "auto",
+        "backend": "GPU (wgpu)",
+        "hardwareAccelerated": true,
+        "diagnostic": "wgpu Vulkan: NVIDIA GeForce RTX 5090 (DiscreteGpu; NVIDIA)"
+      }
+    ]
+  },
+  "reduceMs": [
+    862.678,
+    854.373,
+    847.521
+  ],
+  "cancelMs": [
+    241.249,
+    235.338,
+    234.907
+  ],
+  "reduceFrameP95Ms": [
+    20.746,
+    22.041,
+    23.464
+  ],
+  "reduceFrameMaxMs": [
+    52.582,
+    62.452,
+    63.86
+  ],
+  "cancelFrameP95Ms": [
+    103.327,
+    112.362,
+    99.627
+  ],
+  "cancelFrameMaxMs": [
+    103.327,
+    112.362,
+    99.627
+  ],
+  "workerHeartbeatP95Ms": [
+    19.5,
+    19.473,
+    19.428
+  ],
+  "workerFrameP95Ms": [
+    19.997,
+    18.993,
+    20.621
+  ],
+  "peakProcessRssMiB": [
+    584.71875,
+    582.203125,
+    586.91796875
+  ],
+  "reduceMedianMs": 854.373,
+  "cancelMedianMs": 235.338,
+  "maxProcessRssMiB": 586.91796875
+}

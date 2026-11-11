@@ -1,88 +1,85 @@
 # Contributing to mmx
 
-Thanks for taking the time to improve mmx. This project is a clean-room
-reimplementation of Meshmixer's useful geometry workflows, and contributions
-are welcome in the kernel, the Studio app, the documentation, and the test
-corpus.
+Keep changes focused. Make the behavior clear, test it, and document what still
+needs work. Fixes, new features, useful test models, and clearer docs all help.
 
-## Before you start
+## Get running
 
-- Read [`docs/REVERSE-ENGINEERING.md`](docs/REVERSE-ENGINEERING.md) and
-  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The project deliberately
-  separates **[observed]** behaviour from **[inferred]** behaviour and from
-  **[unknown]** constants.
-- Check the issue tracker and open an issue before a large change. Small fixes
-  and documentation corrections can go straight to a pull request.
-- Do not copy Autodesk source code. The implementation is clean-room; the
-  shipped binary, its RTTI, strings and public API headers are the evidence.
+Follow the [quick start](QUICKSTART.md) for the platform setup. Use Flutter
+**3.47.9**, the version pinned in CI, with its bundled Dart SDK. Desktop builds
+also need Rust **1.99.1**, Python **3.11+**, and the native tools for your OS.
 
-## Development setup
+From the repository root, run `python3 start.py --debug` for development and hot
+reload. On Windows, use `py -3 start.py --debug`. Tests use repository fixtures;
+you do not need Meshmixer installed.
 
-Requirements:
+Use `make build` for optimized CLI and Studio binaries, or `make cli` and
+`make studio` for one component. Without Make, use `python3 tool/build.py` (Windows:
+`py -3 tool/build.py`). Build on the target OS; staged outputs and packaging
+commands are documented in the [quick start](QUICKSTART.md#optimized-binaries-with-make).
 
-- Flutter 3.47 or newer and Dart 3.13 or newer.
-- Linux, macOS or Windows for the desktop app.
-- No Meshmixer installation is required to run the tests: the sample models
-  are vendored under `packages/mmx_core/test/fixtures/models`.
+## Know where the change belongs
 
-Run the full verification:
+| Path | What belongs here |
+|---|---|
+| `packages/mmx_core/lib/src/` | Pure Dart geometry, file formats, scene history, and CPU rendering |
+| `packages/mmx_core/bin/` | CLI commands, scan reports and batch orchestration |
+| `apps/mmx_studio/lib/` | Desktop state, controls, and rendering integration |
+| `apps/mmx_studio/native_renderer/` | Rust/wgpu renderer and shaders |
+| Each package's `test/` | Unit tests and fixtures |
+| `apps/mmx_studio/integration_test/` | Native desktop workflows |
+| `tool/` and `docs/` | Verification, packaging, and project documentation |
+
+Read the [architecture](docs/ARCHITECTURE.md) before changing boundaries between
+components. Keep Flutter out of the kernel.
+
+## Write code we can maintain
+
+- Use two-space indentation in Dart, `lower_snake_case.dart` filenames,
+  `UpperCamelCase` types, and `lowerCamelCase` members. Run `dart format` on
+  changed Dart files. The analyzers use `lints/recommended` and `flutter_lints`.
+- Bound allocations and use typed arrays in geometry loops. Preserve supported
+  mesh attributes, undo, and cancellation behavior.
+- Report algorithm fallbacks and approximations. Failed edits must leave the
+  document intact; failed exports must preserve existing files.
+- This is a clean-room project. Do not copy Autodesk source. Cite algorithm
+  sources and label claims **observed**, **inferred**, or **unknown**, following
+  the [reverse-engineering guide](docs/REVERSE-ENGINEERING.md).
+
+## Check your work
+
+From the repository root, run:
 
 ```sh
 ./tool/verify.sh
 ```
 
-Or individually:
+On Windows, run that script in Git Bash, or use `py -3 tool/build.py --verify`.
+`make test` invokes the same portable verifier. It fetches dependencies, checks
+Dart formatting, runs both analyzers, and runs the kernel and Studio test suites.
 
-```sh
-cd packages/mmx_core
-dart pub get
-dart analyze
-dart test
+Use `*_test.dart` names. The kernel uses `package:test`; Studio uses
+`flutter_test`. For a focused run, use `dart test test/remesh_test.dart` from
+`packages/mmx_core/` or `flutter test test/interaction_test.dart` from Studio.
+Geometry changes need watertightness, manifoldness, winding, and volume
+assertions. Target more than 80% line coverage for new kernel modules.
 
-cd ../../apps/mmx_studio
-flutter pub get
-flutter analyze
-flutter test
-```
+For renderer changes, run `cargo fmt --check`, `cargo test --locked`, and
+`cargo clippy --locked --all-targets -- -D warnings` from the renderer directory.
+See [testing](docs/TESTING.md) for coverage and native integration checks.
 
-## Code standards
+## Submit the change
 
-- Keep the kernel free of Flutter imports; `mmx_core` must remain a pure Dart
-  package.
-- Use typed arrays and allocation-bounded loops in hot geometry paths.
-- Add tests for new logic. The project target is more than 80% line coverage
-  for new kernel modules; destructive topology operations need watertightness,
-  manifoldness and volume assertions, not just "it returned a mesh".
-- Run `dart format` on changed Dart files. The project uses the standard Dart
-  formatter and the analyzer configuration in the repository.
-- Document algorithms with their source: published paper, recovered Meshmixer
-  symbol, or explicit approximation. Label claims as observed, inferred or
-  unknown.
-- Do not silently fall back to a different algorithm. Return a result flag or
-  document the fallback, as `RemeshResult.usedUniformFallback` and
-  `BooleanResult.usedFallback` do.
+Open an issue before a large change. Small fixes can go straight to a pull
+request. Use a topic branch and concise imperative commits, such as
+`Fix material export paths`.
 
-## Pull requests
+Follow the [PR template](.github/PULL_REQUEST_TEMPLATE.md): explain the resulting
+behavior, link the issue or reproducer, and list verification commands and
+known limits. Include screenshots for visible UI changes. Update affected docs
+and wait for CI to pass.
 
-1. Fork the repository and create a topic branch.
-2. Keep the change focused; avoid unrelated formatting churn.
-3. Add or update tests and documentation in the same pull request.
-4. Describe the behaviour change, the evidence, and the verification commands
-   you ran.
-5. Make sure CI and `./tool/verify.sh` pass.
-
-By submitting a contribution you agree that it is licensed under the Apache
-License 2.0, the same license as the rest of the project.
-
-## Reporting bugs
-
-Include:
-
-- the mmx version or commit;
-- the platform and Flutter/Dart version;
-- the input format and, if possible, a minimal model;
-- the command or UI action;
-- expected and actual output, including boundary-loop/non-manifold counts.
-
-Use the GitHub issue templates when available. For security issues, follow
-[`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+Bug reports should include the commit, OS/toolchain, input model where possible,
+reproduction steps, and expected versus actual results. Report security issues
+through [SECURITY.md](SECURITY.md). Follow the [code of conduct](CODE_OF_CONDUCT.md).
+Contributions use the project's [Apache-2.0 license](LICENSE).

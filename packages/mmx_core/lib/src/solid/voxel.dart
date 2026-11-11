@@ -186,6 +186,11 @@ class VoxelGrid {
     final far = band * 4;
     while (stack.isNotEmpty) {
       final idx = stack.removeLast();
+      // Seeds were marked outside when queued, just like their neighbors.
+      // They also need a positive distance: leaving their initial zero value
+      // creates an artificial boundary shell whenever a positive offset is
+      // applied to the field.
+      values[idx] = far;
       final k = idx % nz;
       final j = (idx ~/ nz) % ny;
       final i = idx ~/ (nz * ny);

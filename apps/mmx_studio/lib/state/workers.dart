@@ -6,6 +6,8 @@ import 'dart:typed_data';
 
 import 'package:mmx_core/mmx_core.dart';
 
+import '../render/desktop_renderer.dart';
+
 // Top-level dispatch keeps UI images, listeners and pending futures out of isolates.
 Future<Uint8List> encodeProjectWorker(ProjectData project) =>
     executeWorker(() => ProjectIO.write(project));
@@ -32,8 +34,17 @@ Future<BooleanResult> booleanWorker(
         ),
 );
 
-Future<PackResult> packWorker(List<TriMesh> meshes) => executeWorker(
-  () => Packer.pack(meshes, bedWidth: 200, bedDepth: 200, quality: 1),
+Future<PackResult> packWorker(
+  List<TriMesh> meshes, {
+  PrintProfile profile = const PrintProfile(),
+}) => executeWorker(
+  () => Packer.pack(
+    meshes,
+    bedWidth: profile.width,
+    bedDepth: profile.depth,
+    border: profile.border,
+    quality: 1,
+  ),
 );
 
 Future<TriMesh> sculptWorker(
@@ -58,29 +69,52 @@ Future<TriMesh> sculptWorker(
 Future<RemeshResult> remeshWorker(
   TriMesh mesh,
   double target,
-  bool preserveGroups,
-) => executeWorker(
-  () => IsotropicRemesher.remeshDetailed(
-    mesh,
-    targetEdgeLength: target,
-    iterations: 5,
-    preserveGroupBoundaries: preserveGroups,
-  ),
+  bool preserveGroups, {
+  Uint8List? mask,
+}) => executeWorker(
+  () => mask == null
+      ? IsotropicRemesher.remeshDetailed(
+          mesh,
+          targetEdgeLength: target,
+          iterations: 5,
+          preserveGroupBoundaries: preserveGroups,
+        )
+      : RemeshResult(
+          editSelection(
+            mesh,
+            mask,
+            (patch) => IsotropicRemesher.remesh(
+              patch,
+              targetEdgeLength: target,
+              iterations: 5,
+              preserveGroupBoundaries: preserveGroups,
+            ),
+          ),
+        ),
 );
 
-Future<TriMesh> reduceWorker(TriMesh mesh, double pct) =>
-    executeWorker(() => Decimator.reduce(mesh, percentage: pct));
+Future<TriMesh> reduceWorker(TriMesh mesh, double pct, {Uint8List? mask}) =>
+    executeWorker(
+      () => mask == null
+          ? Decimator.reduce(mesh, percentage: pct)
+          : editSelection(
+              mesh,
+              mask,
+              (patch) => Decimator.reduce(patch, percentage: pct),
+            ),
+    );
 
 Future<TriMesh> makePartWorker(TriMesh mesh, Set<int> faces) => executeWorker(
   () => ComplexTools.makeSolidPart(mesh, faces, resolution: 64),
 );
 
-Future<TriMesh> makeSolidWorker(
+Future<SolidResult> makeSolidWorker(
   TriMesh mesh,
   SolidMode mode,
   int res,
   double offset,
   int smooth,
+  double minimumThickness,
 ) => executeWorker(
   () => Solidifier.makeSolid(
     mesh,
@@ -88,19 +122,26 @@ Future<TriMesh> makeSolidWorker(
     resolution: res,
     offset: offset,
     smoothing: smooth,
-  ).mesh,
+    minThickness: minimumThickness,
+  ),
 );
 
-Future<TriMesh> hollowWorker(TriMesh mesh, double t, int holes, int res) =>
-    executeWorker(
-      () => Solidifier.hollow(
-        mesh,
-        thickness: t,
-        holes: holes,
-        holeRadius: t * 1.2,
-        resolution: res,
-      ).mesh,
-    );
+Future<SolidResult> hollowWorker(
+  TriMesh mesh,
+  double t,
+  int holes,
+  int res,
+  double minimumThickness,
+) => executeWorker(
+  () => Solidifier.hollow(
+    mesh,
+    thickness: t,
+    holes: holes,
+    holeRadius: t * 1.2,
+    resolution: res,
+    minThickness: minimumThickness,
+  ),
+);
 
 Future<TriMesh> planeCutWorker(
   TriMesh mesh,
@@ -281,14 +322,61 @@ Future<TriMesh> repairWorker(TriMesh mesh) => executeWorker(() {
 Future<List<MixObject>> readMixWorker(Uint8List bytes) =>
     executeWorker(() => MixIO.read(bytes));
 
-Future<TriMesh> readMeshWorker(String path, Uint8List bytes) =>
-    executeWorker(() => MeshIO.readBytes(path, bytes));
+Future<TriMesh> readMeshWorker(String path, Uint8List bytes) => executeWorker(
+  () => path.toLowerCase().endsWith('.obj')
+      ? MeshIO.readFile(path)
+      : MeshIO.readBytes(path, bytes),
+);
 
 Future<Uint8List> writeMeshWorker(String path, TriMesh mesh) =>
     executeWorker(() => MeshIO.writeBytes(path, mesh));
 
-Future<Uint8List> renderWorker(
+Future<PreparedMeshExport> prepareMeshExportWorker(String path, TriMesh mesh) =>
+    executeWorker(() => MeshIO.prepareExport(path, mesh));
+
+Future<DesktopRenderFrame> renderWorker(
   List<RenderObject> objects,
   Camera camera,
-  RenderOptions options,
-) => executeWorker(() => Rasterizer.render(objects, camera, options));
+  RenderOptions options, {
+  RenderBackendPreference preference = RenderBackendPreference.auto,
+}) => executeWorker(
+  () => renderDesktopFrame(objects, camera, options, preference: preference),
+);
+
+Future<ScanReport> scanInspectWorker(
+  TriMesh mesh,
+  PrintProfile profile,
+  double area,
+) => executeWorker(
+  () => ScanWorkflow.inspect(mesh, profile: profile, fragmentArea: area),
+);
+Future<ScanEditResult> scanEditWorker(
+  TriMesh mesh,
+  ScanStep step,
+  Uint8List? mask,
+) => executeWorker(() => ScanRecipe.apply(mesh, step, selection: mask));
+Future<SurfaceDeviation> scanDeviationWorker(
+  TriMesh original,
+  TriMesh changed,
+) => executeWorker(() => SurfaceDeviation.measure(original, changed));
+Future<String> fingerprintWorker(TriMesh mesh) =>
+    executeWorker(() => meshFingerprint(mesh));
+Future<SliceResult> sliceWorker(TriMesh mesh, double layer) =>
+    executeWorker(() => Slicer.slice(mesh, layerHeight: layer));
+Future<TriMesh> discardWorker(TriMesh mesh, Uint8List mask) => executeWorker(
+  () => mesh.extractFaces([
+    for (var f = 0; f < mesh.faceCount; f++)
+      if (mask[f] == 0) f,
+  ]),
+);
+Future<TriMesh> denoiseWorker(
+  TriMesh mesh,
+  Uint8List mask,
+  double displacement,
+) => executeWorker(
+  () => ScanWorkflow.denoise(
+    mesh,
+    faceMask: mask,
+    maximumDisplacement: displacement,
+  ),
+);

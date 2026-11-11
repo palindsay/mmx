@@ -32,8 +32,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.text('MESH STUDIO'), findsOneWidget);
-        expect(state.selected!.name, 'Starter sphere');
-        expect(state.activeMesh!.faceCount, greaterThan(0));
+        expect(state.doc.objects, isEmpty);
+        expect(find.text('Empty project'), findsOneWidget);
         await state.importPath(input.path, unitScale: 10);
         await tester.pumpAndSettle();
         expect(state.selected, isNotNull, reason: state.status);
@@ -67,6 +67,14 @@ void main() {
         expect(exported.faceCount, reduced);
         expect(MeshTopology(exported).boundaryLoops(), isEmpty);
         expect(MeshTopology(exported).nonManifoldEdges(), isEmpty);
+        await tester.tap(find.byTooltip('Project'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('New project'));
+        await tester.pumpAndSettle();
+        expect(state.doc.objects, isEmpty);
+        expect(state.doc.canUndo, false);
+        expect(state.projectPath, isNull);
+        expect(find.text('Empty project'), findsOneWidget);
         await tester.pumpWidget(const SizedBox());
         await tester.pumpAndSettle();
       } finally {

@@ -44,6 +44,8 @@ class PreciseBoolean {
     double? edgeLength,
     int resolution = 160,
   }) {
+    a.requireUntextured('Precise boolean');
+    b.requireUntextured('Precise boolean');
     if (resolution < 8 ||
         resolution > 256 ||
         (edgeLength != null && (!edgeLength.isFinite || edgeLength <= 0))) {
@@ -114,8 +116,20 @@ class PreciseBoolean {
       );
     }
     out = Weld.weldVertices(out, tolerance: tolerance);
-    out = Bridge.stitchNearest(out,
-        maxGap: out.bounds().diagonal * 0.25, maxPairs: 64);
+    try {
+      out = Bridge.stitchNearest(out,
+          maxGap: out.bounds().diagonal * 0.25, maxPairs: 64);
+    } on StateError catch (error) {
+      return BooleanResult(
+          Solidifier.boolean(a, b, op, resolution: resolution).mesh,
+          usedFallback: true,
+          fallbackReason: 'invalid bridge: ${error.message}');
+    } on ArgumentError catch (error) {
+      return BooleanResult(
+          Solidifier.boolean(a, b, op, resolution: resolution).mesh,
+          usedFallback: true,
+          fallbackReason: 'unsupported bridge: ${error.message}');
+    }
     out = Weld.weldCracks(out, tolerance: tolerance);
     out.removeDegenerateFaces(minArea: scale * scale * 1e-16);
     out.compact();

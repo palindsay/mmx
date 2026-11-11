@@ -154,6 +154,15 @@ def main():
         (evidence / f'{name}.json').write_text(json.dumps(nodes, indent=2, ensure_ascii=False))
         subprocess.run(['import', '-window', 'root', str(evidence / f'{name}.png')], check=True)
 
+    def canvas_pixels(name, crop):
+        # The isolated display is fixed at 1280x800 and Studio opens 1280x720.
+        # Exclude toolbars, the live render-time HUD, and the sidebar so a
+        # changed button or timing label cannot satisfy the visual check.
+        raw = subprocess.check_output([
+            'convert', str(evidence / f'{name}.png'), '-crop', crop,
+            '+repage', '-depth', '8', 'RGB:-'])
+        return list(zip(raw[0::3], raw[1::3], raw[2::3]))
+
     def start():
         nonlocal proc
         proc = subprocess.Popen([str(args.bundle / 'mmx_studio')], cwd=args.bundle,
@@ -251,6 +260,34 @@ def main():
             assert find(name=label), f'No accessible name: {label}'
         snapshot('01-accessible-startup')
         record('AT-SPI icon/tool control names', labels=labels)
+        invoke('Print bed')
+        pause(.5)
+        snapshot('01b-print-bed-off')
+        crop = '850x510+80+140'
+        before = canvas_pixels('01-accessible-startup', crop)
+        after = canvas_pixels('01b-print-bed-off', crop)
+        changed = sum(a != b for a, b in zip(before, after))
+        assert changed > 100, 'Print bed toggle did not change the viewport grid/outline'
+        # This region is inside the lower half of the deterministic startup
+        # sphere, below y=0. An opaque floor would replace these blue surface
+        # pixels when enabled, even though the AT-SPI toggle state is correct.
+        lower_crop = '80x40+460+470'
+        lower_before = canvas_pixels('01-accessible-startup', lower_crop)
+        lower_after = canvas_pixels('01b-print-bed-off', lower_crop)
+        surface = [i for i, (r, g, b) in enumerate(lower_after)
+                   if g > r + 10 and b > r + 15]
+        assert len(surface) > 2000, 'Expected below-bed sphere surface is not visible'
+        retained = sum(lower_before[i] == lower_after[i] for i in surface)
+        assert retained >= len(surface) * .90, 'Enabled bed hides below-bed sphere surface'
+        invoke('Print bed')
+        pause(.5)
+        snapshot('01c-print-bed-restored')
+        restored = canvas_pixels('01c-print-bed-restored', crop)
+        assert restored == before, 'Restoring Print bed did not restore the viewport'
+        assert not dirty()
+        record('Print bed visually toggles grid/outline and preserves below-bed geometry',
+               canvas_crop=crop, changed_pixels=changed, below_bed_crop=lower_crop,
+               visible_surface_pixels=len(surface), retained_surface_pixels=retained)
         invoke('Sculpt')
         wait(lambda: find(name='Size', role='slider'), 'named brush slider')
         invoke('Navigate')

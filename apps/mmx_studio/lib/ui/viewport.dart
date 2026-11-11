@@ -1,4 +1,6 @@
 import 'dart:ui' as ui;
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +23,29 @@ class _MeshViewportState extends State<MeshViewport> {
   GizmoProjection? _dragProjection;
   Offset? _dragStart;
   int? _dragAxis;
+  int? _dragPointer;
+  ManipulatorMode? _dragMode;
+  double _lastRotationAngle = 0;
+  double _rotationAmount = 0;
+
+  void _clearManipulatorPointer() {
+    _dragAxis = null;
+    _dragPointer = null;
+    _dragMode = null;
+    _dragProjection = null;
+    _dragStart = null;
+    _lastRotationAngle = 0;
+    _rotationAmount = 0;
+  }
+
+  @override
+  void dispose() {
+    if (_dragPointer != null) {
+      unawaited(widget.state.endManipulator(cancel: true));
+    }
+    super.dispose();
+  }
+
   Offset? _last;
   bool _brushing = false;
   Offset? _lastBrush;
@@ -83,6 +108,7 @@ class _MeshViewportState extends State<MeshViewport> {
                 }
               },
               onPointerDown: (event) {
+                if (!state.manipulatorGestureActive) _clearManipulatorPointer();
                 if (state.interactionLocked) return;
                 final primary = (event.buttons & kSecondaryMouseButton) == 0;
                 if (primary &&
@@ -98,6 +124,10 @@ class _MeshViewportState extends State<MeshViewport> {
                     _dragProjection = projection;
                     _dragStart = event.localPosition;
                     _dragAxis = axis;
+                    _dragPointer = event.pointer;
+                    _dragMode = state.manipulatorMode;
+                    _lastRotationAngle = 0;
+                    _rotationAmount = 0;
                     return;
                   }
                 }
@@ -133,14 +163,26 @@ class _MeshViewportState extends State<MeshViewport> {
               },
               onPointerMove: (event) {
                 if (_dragAxis != null) {
-                  state.updateManipulator(
-                    _dragProjection!.dragAmount(
-                      state.manipulatorMode,
-                      _dragAxis!,
-                      _dragStart!,
-                      event.localPosition,
-                    ),
+                  if (_dragPointer != event.pointer) return;
+                  if (!state.manipulatorGestureActive) {
+                    _clearManipulatorPointer();
+                    return;
+                  }
+                  var amount = _dragProjection!.dragAmount(
+                    _dragMode!,
+                    _dragAxis!,
+                    _dragStart!,
+                    event.localPosition,
                   );
+                  if (_dragMode == ManipulatorMode.rotate) {
+                    var delta = amount - _lastRotationAngle;
+                    if (delta > math.pi) delta -= 2 * math.pi;
+                    if (delta < -math.pi) delta += 2 * math.pi;
+                    _rotationAmount += delta;
+                    _lastRotationAngle = amount;
+                    amount = _rotationAmount;
+                  }
+                  state.updateManipulator(amount);
                   return;
                 }
                 if (state.busy && !state.sculptGestureActive) return;
@@ -190,9 +232,8 @@ class _MeshViewportState extends State<MeshViewport> {
               },
               onPointerUp: (event) {
                 if (_dragAxis != null) {
-                  _dragAxis = null;
-                  _dragProjection = null;
-                  _dragStart = null;
+                  if (_dragPointer != event.pointer) return;
+                  _clearManipulatorPointer();
                   state.endManipulator();
                   return;
                 }
@@ -210,9 +251,8 @@ class _MeshViewportState extends State<MeshViewport> {
               },
               onPointerCancel: (event) {
                 if (_dragAxis != null) {
-                  _dragAxis = null;
-                  _dragProjection = null;
-                  _dragStart = null;
+                  if (_dragPointer != event.pointer) return;
+                  _clearManipulatorPointer();
                   state.endManipulator(cancel: true);
                 }
                 if (state.sculptGestureActive) {
@@ -273,8 +313,13 @@ class _MeshViewportState extends State<MeshViewport> {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        Text(
+                          '${state.manipulatorSpace.name} axes${state.manipulatorSnap.enabled ? ' · snap' : ''}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        const SizedBox(width: 8),
                         const Tooltip(
-                          message: 'Drag a colored axis. Rotate around the center; scale by dragging right/up. Escape cancels.',
+                          message: 'Drag a colored axis. Uniform scale uses right/up dragging. Numeric values, local/world axes and snapping are in Transform properties. Escape cancels.',
                           child: Icon(Icons.help_outline, size: 16),
                         ),
                       ],
@@ -312,7 +357,7 @@ class _Hud extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '$verts verts  $faces faces   render ${state.lastRenderMs}ms',
+            '$verts verts  $faces faces   render ${state.lastRenderMs}ms · ${state.renderBackend}',
             style: TextStyle(
               fontSize: 11,
               color: Colors.white.withValues(alpha: 0.55),

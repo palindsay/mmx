@@ -1,9 +1,11 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:mmx_core/mmx_core.dart';
 
 import '../state/studio_state.dart';
+import 'manipulator_controls.dart';
+import 'material_panel.dart';
+import 'renderer_controls.dart';
+import 'scan_panel.dart';
 
 /// Left tool rail, mirroring the shipped Meshmixer action bars
 /// (Meshmix / Import / Select / Sculpt / Stamp / Edits / Analysis / Shaders /
@@ -16,6 +18,7 @@ class LeftRail extends StatelessWidget {
   Widget build(BuildContext context) {
     const items = <(StudioTool, IconData, String)>[
       (StudioTool.navigate, Icons.pan_tool_alt_outlined, 'Navigate'),
+      (StudioTool.scan, Icons.document_scanner_outlined, 'Scan to print'),
       (StudioTool.select, Icons.highlight_alt, 'Select'),
       (StudioTool.sculpt, Icons.brush_outlined, 'Sculpt'),
       (StudioTool.stamp, Icons.approval_outlined, 'Stamp'),
@@ -131,6 +134,12 @@ class PropertiesPanel extends StatelessWidget {
         children: [
           _SceneSection(state: state),
           const Divider(height: 26),
+          if (state.tool == StudioTool.navigate ||
+              state.tool == StudioTool.modify)
+            ManipulatorControls(state: state),
+          if (state.tool == StudioTool.navigate ||
+              state.tool == StudioTool.modify)
+            MaterialPanel(state: state),
           ..._toolSection(context),
         ],
       ),
@@ -139,9 +148,12 @@ class PropertiesPanel extends StatelessWidget {
 
   List<Widget> _toolSection(BuildContext context) {
     switch (state.tool) {
+      case StudioTool.scan:
+        return [ScanPanel(state: state)];
       case StudioTool.navigate:
         return <Widget>[
           _sectionTitle('View'),
+          RendererControls(state: state),
           _kv('Camera', 'orbit / shift-drag pan / scroll zoom'),
           _kv('Objects', '${state.doc.objects.length}'),
           _kv('Undo depth', '${state.doc.undoDepth}'),
@@ -175,8 +187,16 @@ class PropertiesPanel extends StatelessWidget {
           Row(
             children: [
               _button(context, 'Discard', _discardSelection),
-              _button(context, 'Remesh', state.doRemesh),
-              _button(context, 'Reduce', state.doReduce),
+              _button(
+                context,
+                'Remesh',
+                () => state.doRemesh(selectionOnly: true),
+              ),
+              _button(
+                context,
+                'Reduce',
+                () => state.doReduce(selectionOnly: true),
+              ),
             ],
           ),
           Row(
@@ -476,6 +496,18 @@ class PropertiesPanel extends StatelessWidget {
             8,
             (v) => state.solidSmoothing = v.round(),
           ),
+          _slider(
+            'Minimum wall check (mm; 0 = off)',
+            state.solidMinThickness,
+            0,
+            20,
+            (v) => state.solidMinThickness = v,
+          ),
+          const Text(
+            'Checks inward-normal clearance and may grow the model. '
+            'Use Accurate or Blocky; verified edits bake object transforms.',
+            style: TextStyle(fontSize: 11, color: Colors.white54),
+          ),
           const SizedBox(height: 8),
           _button(context, 'Make Solid', state.doMakeSolid),
         ];
@@ -502,6 +534,18 @@ class PropertiesPanel extends StatelessWidget {
             32,
             256,
             (v) => state.solidResolution = v,
+          ),
+          _slider(
+            'Minimum wall check (mm; 0 = off)',
+            state.hollowMinThickness,
+            0,
+            20,
+            (v) => state.hollowMinThickness = v,
+          ),
+          const Text(
+            'Checks inward-normal clearance for enclosed shells only '
+            '(zero escape holes). May thicken the wall and bake transforms.',
+            style: TextStyle(fontSize: 11, color: Colors.white54),
           ),
           const SizedBox(height: 8),
           _button(context, 'Hollow', state.doHollow),
@@ -787,82 +831,12 @@ class PropertiesPanel extends StatelessWidget {
     );
   }
 
-  Future<void> _discardSelection() async {
-    final obj = state.selected;
-    final sel = state.selection;
-    if (obj == null || sel == null) return;
-    final mesh = obj.mesh;
-    final mask = sel.faceMask;
-    await state.runOp('Discard selection', () async {
-      final keep = <int>[];
-      for (var f = 0; f < mesh.faceCount; f++) {
-        if (mask[f] != 0) continue;
-        keep.addAll(<int>[
-          mesh.indices[f * 3],
-          mesh.indices[f * 3 + 1],
-          mesh.indices[f * 3 + 2],
-        ]);
-      }
-      final out = TriMesh(mesh.positions, Uint32List.fromList(keep));
-      out.compact();
-      return out;
-    });
-  }
-
+  Future<void> _discardSelection() => state.discardSelection();
   Future<void> _extractSelection() => state.extractSelection();
-
   Future<void> _makePart() => state.makePart();
-
-  Future<void> _smoothSelection() async {
-    final obj = state.selected;
-    final sel = state.selection;
-    if (obj == null || sel == null) return;
-    final mesh = obj.mesh;
-    final mask = sel.faceMask;
-    await state.runOp('Smooth selection', () async {
-      var m = mesh.clone();
-      for (var i = 0; i < 12; i++) {
-        final topo = MeshTopology(m);
-        final next = Float32List.fromList(m.positions);
-        for (var v = 0; v < m.vertexCount; v++) {
-          var inside = false;
-          for (final f in topo.facesOfVertex(v)) {
-            if (f < mask.length && mask[f] != 0) {
-              inside = true;
-              break;
-            }
-          }
-          if (!inside) continue;
-          final nb = topo.neighborsOfVertex(v);
-          if (nb.isEmpty) continue;
-          var sx = 0.0, sy = 0.0, sz = 0.0;
-          for (final w in nb) {
-            sx += m.vx(w);
-            sy += m.vy(w);
-            sz += m.vz(w);
-          }
-          final k = nb.length;
-          next[v * 3] = 0.5 * m.vx(v) + 0.5 * sx / k;
-          next[v * 3 + 1] = 0.5 * m.vy(v) + 0.5 * sy / k;
-          next[v * 3 + 2] = 0.5 * m.vz(v) + 0.5 * sz / k;
-        }
-        m.positions = next;
-      }
-      return m;
-    });
-  }
-
+  Future<void> _smoothSelection() => state.smoothSelection();
   Future<void> _packAll() => state.packAll();
-
-  Future<void> _sliceReport() async {
-    final obj = state.selected;
-    if (obj == null) return;
-    final r = Slicer.slice(obj.worldMesh(), layerHeight: 0.2);
-    state.status =
-        'Slicing: ${r.layers.length} layers at 0.2mm '
-        '(${r.elapsedMs} ms)';
-    state.notify();
-  }
+  Future<void> _sliceReport() => state.doSliceReport();
 }
 
 class _SceneSection extends StatelessWidget {
@@ -921,6 +895,91 @@ class _SceneSection extends StatelessWidget {
                   Text(
                     '${o.mesh.faceCount}',
                     style: const TextStyle(fontSize: 10, color: Colors.white38),
+                  ),
+                  if (o.locked)
+                    const Icon(
+                      Icons.lock_outline,
+                      size: 14,
+                      semanticLabel: 'Protected original',
+                    ),
+                  PopupMenuButton<String>(
+                    tooltip: 'Actions for ${o.name}',
+                    icon: const Icon(Icons.more_horiz, size: 18),
+                    onSelected: (action) async {
+                      if (action == 'rename') {
+                        final controller = TextEditingController(text: o.name);
+                        final name = await showDialog<String>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Rename object'),
+                            content: TextField(
+                              controller: controller,
+                              autofocus: true,
+                              maxLength: 256,
+                              decoration: const InputDecoration(
+                                labelText: 'Object name',
+                              ),
+                              onSubmitted: (value) =>
+                                  Navigator.pop(context, value),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.pop(context, controller.text),
+                                child: const Text('Rename'),
+                              ),
+                            ],
+                          ),
+                        );
+                        controller.dispose();
+                        if (name != null) {
+                          await state.sceneAction(o.id, action, name: name);
+                        }
+                      } else {
+                        await state.sceneAction(o.id, action);
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'rename',
+                        child: Text('Rename…'),
+                      ),
+                      PopupMenuItem(
+                        value: 'visibility',
+                        child: Text(o.visible ? 'Hide' : 'Show'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'isolate',
+                        child: Text('Isolate'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'showAll',
+                        child: Text('Show editable objects'),
+                      ),
+                      PopupMenuItem(
+                        value: 'target',
+                        enabled: !o.locked,
+                        child: Text(
+                          o.isTarget
+                              ? 'Clear reference target'
+                              : 'Use as reference target',
+                        ),
+                      ),
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'delete',
+                        enabled:
+                            !o.locked &&
+                            !state.doc.objects.any(
+                              (item) => item.scanSourceId == o.id,
+                            ),
+                        child: const Text('Delete object'),
+                      ),
+                    ],
                   ),
                 ],
               ),

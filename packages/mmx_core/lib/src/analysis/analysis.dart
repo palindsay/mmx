@@ -17,17 +17,27 @@ class ThicknessAnalysis {
   final double meanThickness;
   final int belowThresholdCount;
   final List<int> defectVertices;
+  final int sampledCount;
+  final int unknownCount;
 
   ThicknessAnalysis(this.perVertex, this.minThickness, this.meanThickness,
-      this.belowThresholdCount, this.defectVertices);
+      this.belowThresholdCount, this.defectVertices,
+      {this.sampledCount = 0, this.unknownCount = 0});
 
   /// [threshold] flags defects. [samples] limits probing to a subset (0 = all).
   static ThicknessAnalysis run(TriMesh mesh,
       {double threshold = 0, int maxSamples = 0, double maxDist = 0}) {
+    if (!threshold.isFinite ||
+        threshold < 0 ||
+        maxSamples < 0 ||
+        !maxDist.isFinite ||
+        maxDist < 0) {
+      throw ArgumentError('Invalid thickness analysis settings');
+    }
     final topo = MeshTopology(mesh);
     final bvh = TriangleBVH.build(mesh);
     final n = mesh.vertexCount;
-    final out = Float32List(n);
+    final out = Float32List(n)..fillRange(0, n, double.nan);
     final b = mesh.bounds();
     final limit = maxDist > 0 ? maxDist : b.diagonal;
     final normals = _vertexNormals(mesh, topo);
@@ -35,18 +45,25 @@ class ThicknessAnalysis {
     var sum = 0.0;
     var count = 0;
     final defects = <int>[];
+    var sampled = 0, unknown = 0;
+    final epsilon = math.max(b.diagonal * 1e-7, 1e-12);
 
     final step = maxSamples > 0 && maxSamples < n ? (n / maxSamples).ceil() : 1;
     for (var v = 0; v < n; v += step) {
       final nx = normals[v * 3],
           ny = normals[v * 3 + 1],
           nz = normals[v * 3 + 2];
-      final px = mesh.vx(v) - nx * 1e-4;
-      final py = mesh.vy(v) - ny * 1e-4;
-      final pz = mesh.vz(v) - nz * 1e-4;
+      sampled++;
+      final px = mesh.vx(v) - nx * epsilon;
+      final py = mesh.vy(v) - ny * epsilon;
+      final pz = mesh.vz(v) - nz * epsilon;
       final hit = bvh
           .raycast(<double>[px, py, pz], <double>[-nx, -ny, -nz], tMax: limit);
-      final t = hit == null ? limit : hit.t;
+      if (hit == null) {
+        unknown++;
+        continue;
+      }
+      final t = hit.t + epsilon;
       out[v] = t;
       if (t < minT) minT = t;
       sum += t;
@@ -54,7 +71,8 @@ class ThicknessAnalysis {
       if (threshold > 0 && t < threshold) defects.add(v);
     }
     return ThicknessAnalysis(out, count == 0 ? 0 : minT,
-        count == 0 ? 0 : sum / count, defects.length, defects);
+        count == 0 ? 0 : sum / count, defects.length, defects,
+        sampledCount: sampled, unknownCount: unknown);
   }
 
   static Float32List _vertexNormals(TriMesh m, MeshTopology topo) {
@@ -138,11 +156,11 @@ class OverhangAnalysis {
       final d = nx * bdx + ny * bdy + nz * bdz;
       final angle = math.acos(d.clamp(-1.0, 1.0)) * 180 / math.pi;
       perFace[f] = angle;
-      if (d < -threshold) {
+      if (d > threshold) {
         // Face points downward more steeply than the allowed angle.
         overhangArea += area;
         faces.add(f);
-        final sev = ((-d - threshold) / (1 - threshold)).clamp(0.0, 1.0);
+        final sev = ((d - threshold) / (1 - threshold)).clamp(0.0, 1.0);
         for (final v in <int>[a, b, c]) {
           if (sev > severity[v]) severity[v] = sev;
         }

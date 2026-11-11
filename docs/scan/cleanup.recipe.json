@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "units": "mm",
+  "steps": [
+    {"operation": "repair", "parameters": {"weldMm": 0.001}},
+    {"operation": "fragments", "parameters": {"areaMm2": 1}},
+    {"operation": "denoise", "parameters": {"displacementMm": 0.05, "iterations": 5, "creaseDegrees": 45}}
+  ]
+}

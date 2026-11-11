@@ -41,6 +41,48 @@ Future<String> writeProject(Directory dir) async {
 }
 
 void main() {
+  test(
+    'clamped layout callbacks do not continuously reschedule previews',
+    () async {
+      final state = ControlledRenderState();
+      try {
+        state.setFrameSize(5000, 0);
+        await Future<void>.delayed(Duration.zero);
+        expect(state.calls, 1);
+        for (var i = 0; i < 5; i++) {
+          state.setFrameSize(5000 + i, -i);
+          await Future<void>.delayed(Duration.zero);
+        }
+        expect(state.frameWidth, 4096);
+        expect(state.frameHeight, 1);
+        expect(state.calls, 1);
+        state.setFrameSize(600, 400);
+        await Future<void>.delayed(Duration.zero);
+        expect(state.calls, 2);
+      } finally {
+        state.dispose();
+      }
+    },
+  );
+
+  test(
+    'scheduled preview failures report status and allow a later render',
+    () async {
+      final state = ControlledRenderState()..failCalls.add(1);
+      try {
+        state.setFrameSize(600, 400);
+        await Future<void>.delayed(Duration.zero);
+        expect(state.status, contains('Preview failed'));
+        state.setFrameSize(601, 400);
+        await Future<void>.delayed(Duration.zero);
+        expect(state.calls, 2);
+        expect(state.interactionLocked, false);
+      } finally {
+        state.dispose();
+      }
+    },
+  );
+
   for (final operation in ['open', 'save', 'import']) {
     testWidgets('$operation keeps edits locked through final preview', (
       tester,

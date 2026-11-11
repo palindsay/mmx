@@ -28,11 +28,22 @@ class SliceResult {
 class Slicer {
   static SliceResult slice(TriMesh mesh,
       {double layerHeight = 0.2, double startY = 0, double? endY}) {
+    if (!layerHeight.isFinite ||
+        layerHeight <= 0 ||
+        !startY.isFinite ||
+        (endY != null && !endY.isFinite)) {
+      throw ArgumentError('Invalid slice height or range');
+    }
     final sw = Stopwatch()..start();
     final b = mesh.bounds();
     final y0 = math.max(b.minY, startY);
     final y1 = endY ?? b.maxY;
     final layers = <SliceLayer>[];
+    if (b.isEmpty) return SliceResult(layers, layerHeight, 0);
+    if ((y1 - y0) / layerHeight > 100000 ||
+        (y1 - y0) / layerHeight * mesh.faceCount > 200000000) {
+      throw StateError('Slice report exceeds the layer/triangle work budget');
+    }
 
     for (var y = y0 + layerHeight * 0.5; y < y1; y += layerHeight) {
       final segments = <List<List<double>>>[];

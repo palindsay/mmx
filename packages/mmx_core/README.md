@@ -11,12 +11,13 @@ Licensed under Apache-2.0. See the root [`LICENSE`](../../LICENSE),
 
 - Mesh import/export: OBJ, ASCII/binary PLY, STL, OFF, 3MF and native `.mix`
   (VFMesh 1.2/1.3, face groups, lossless rewrite of unknown records). `.mmx`
-  projects persist scene metadata and original `.mix` source attachments.
+  projects use schema 3 for scene metadata, scan history, protected originals,
+  printer settings and original `.mix` source attachments; schema 1/2 remain readable.
 - Topology: CSR adjacency, edge incidence, boundary loops, components and
   manifold checks.
 - Repair: weld, crack closing, hole filling, non-manifold splitting, inspector.
 - Remeshing and decimation: isotropic, adaptive, group-aware, linear
-  subdivision, QEM/uniform/max-deviation reduce.
+  subdivision, QEM/uniform reduction and boundary-preserving regional edits.
 - Solid: narrow-band SDF voxelization, surface-nets polygonization, Make Solid,
   offset, hollow, booleans with an explicit grid fallback.
 - Analysis: thickness, overhang, stability, deviation, mass properties,
@@ -26,6 +27,9 @@ Licensed under Apache-2.0. See the root [`LICENSE`](../../LICENSE),
   stamps, primitives, alignment, face groups, selection sets, complex
   split/filter/join, tube, polygon, part, pivot and planar unwrap.
 - Rendering: orbit camera, software z-buffer rasterizer, PNG encoder.
+- Scan workflows: defect findings, fragment protection, bounded denoising,
+  per-hole/bridge/trim repair, physical sampled deviation checks, versioned
+  recipes, printer preflight reports and geometry/attribute provenance hashes.
 - CLI in `bin/mmx.dart` covering the operators.
 
 ## Use
@@ -37,22 +41,32 @@ dependencies:
 ```
 
 ```dart
-import 'dart:io';
 import 'package:mmx_core/mmx_core.dart';
 
 Future<void> main() async {
-  final file = File('model.obj');
-  if (await file.length() > MeshIO.maxFileBytes) {
-    throw const FormatException('Mesh exceeds the import size limit');
-  }
-  final mesh = MeshIO.readBytes(file.path, await file.readAsBytes());
-  final reduced = Decimator.reduce(mesh, percentage: 0.4);
-  await writeFileAtomically('out.stl', MeshIO.writeBytes('out.stl', reduced));
+  // Coordinates must already be millimeters for scan operations.
+  // readFile enforces import limits and resolves OBJ/MTL/texture companions.
+  final mesh = MeshIO.readFile('model.obj');
+  final result = ScanRecipe.apply(mesh, ScanStep('denoise', {
+    'displacementMm': 0.1,
+    'iterations': 5,
+    'creaseDegrees': 45,
+  }));
+  // prepare/commit also handles companion files when exporting OBJ.
+  final output = MeshIO.prepareExport('clean.obj', result.mesh);
+  await MeshIO.commitExport('clean.obj', output);
 }
 ```
 
-Heavy operators are deterministic and allocation-bounded; run them in an
-isolate from a UI layer.
+Heavy operators run synchronously; use an owned isolate from a UI layer for
+cancellation. Scan reduction/remeshing checks sampled bidirectional surface
+distance after editing. The low-level QEM cost is a heuristic, not a physical
+distance guarantee. Unsupported attribute/topology combinations fail explicitly.
+
+The [CLI guide](../../docs/CLI.md#scan-to-print-workflow) documents `scan`,
+`cleanup`, `batch`, recipe parameters, exit codes and report limitations. From
+the repository root, `make cli` (or `python3 tool/build.py --component cli`)
+builds and stages an optimized native executable under `bin/builds/`.
 
 ## Test
 

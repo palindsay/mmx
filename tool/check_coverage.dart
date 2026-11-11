@@ -14,8 +14,22 @@ void main(List<String> args) {
     'io/obj.dart',
     'io/ply.dart',
     'io/stl.dart',
+    'io/mesh_io.dart',
+    'io/asset_path.dart',
+    'io/texture.dart',
+    'io/mtl.dart',
+    'io/threemf_materials.dart',
+    'mesh/material.dart',
+    'scene/document.dart',
+    'analysis/wall_thickness.dart',
+    'solid/marching_tetrahedra.dart',
     'mesh/attributes.dart',
     'mesh/limits.dart',
+    'geom/planar_region.dart',
+    'tools/selection_edit.dart',
+    'scan/workflow.dart',
+    'scan/recipe.dart',
+    'scan/provenance.dart',
   ];
   final found = <String>{};
   for (final record in source.split('end_of_record')) {

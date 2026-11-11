@@ -6,17 +6,21 @@ import '../tools/modify.dart';
 
 import '../mesh/tri_mesh.dart';
 import 'zip.dart';
+import 'threemf_materials.dart';
 
 /// 3MF (3D Manufacturing Format) import/export.
 ///
 /// The shipped Meshmixer binary imports 3MF through the bundled lib3mf; this is
-/// a reader/writer for the core mesh payload of an OPC package. Material and
-/// extension payloads are rejected explicitly rather than silently discarded.
+/// Supports core meshes, base colors and diffuse PNG/JPEG textures. Other
+/// material/extension semantics reject explicitly; this is not full Materials
+/// Extension conformance (composites, PBR and color gradients are unsupported).
 class ThreeMfIO {
   static const String _contentTypes = '''<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
 </Types>''';
 
   static const String _rels = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -34,13 +38,15 @@ class ThreeMfIO {
       throw const FormatException('Invalid 3MF geometry');
     }
     final coordinateScale = _units[unit]!;
+    final surface = ThreeMfSurfaceWriter(mesh);
     name = XmlText(name).toXmlString();
     final sb = StringBuffer();
     sb.write('<?xml version="1.0" encoding="UTF-8"?>\n');
     sb.write('<model unit="$unit" xml:lang="en-US" '
-        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n');
+        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="$materialNamespace"${surface.textures.isEmpty && mesh.vertexColors == null ? '' : ' requiredextensions="m"'}>\n');
     sb.write('  <metadata name="Title">$name</metadata>\n');
     sb.write('  <resources>\n');
+    sb.write(surface.resources);
     sb.write('    <object id="1" type="model">\n');
     sb.write('      <mesh>\n        <vertices>\n');
     for (var i = 0; i < mesh.vertexCount; i++) {
@@ -51,7 +57,7 @@ class ThreeMfIO {
     sb.write('        </vertices>\n        <triangles>\n');
     for (var f = 0; f < mesh.faceCount; f++) {
       sb.write('          <triangle v1="${mesh.indices[f * 3]}" '
-          'v2="${mesh.indices[f * 3 + 1]}" v3="${mesh.indices[f * 3 + 2]}"/>\n');
+          'v2="${mesh.indices[f * 3 + 1]}" v3="${mesh.indices[f * 3 + 2]}"${surface.triangle(f)}/>\n');
     }
     sb.write('        </triangles>\n      </mesh>\n    </object>\n');
     sb.write('  </resources>\n');
@@ -63,6 +69,15 @@ class ThreeMfIO {
       ZipEntry('_rels/.rels', Uint8List.fromList(utf8.encode(_rels))),
       ZipEntry(
           '3D/3dmodel.model', Uint8List.fromList(utf8.encode(sb.toString()))),
+      ...surface.textures,
+      if (surface.textures.isNotEmpty)
+        ZipEntry(
+            '3D/_rels/3dmodel.model.rels',
+            Uint8List.fromList(utf8.encode(
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${[
+              for (var i = 0; i < surface.textures.length; i++)
+                '<Relationship Target="/${surface.textures[i].name}" Id="tex$i" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dtexture"/>'
+            ].join()}</Relationships>'))),
     ]);
   }
 
@@ -100,9 +115,19 @@ class ThreeMfIO {
       throw const FormatException('Missing 3MF model payload');
     }
     final root = XmlDocument.parse(utf8.decode(payload)).rootElement;
-    if (root.name.local != 'model' ||
-        (root.getAttribute('requiredextensions') ?? '').trim().isNotEmpty) {
+    if (root.name.local != 'model') {
       throw const FormatException('Unsupported 3MF model');
+    }
+    for (final prefix in (root.getAttribute('requiredextensions') ?? '')
+        .split(RegExp(r'\s+'))
+        .where((s) => s.isNotEmpty)) {
+      final uri = root.attributes
+          .where((a) => a.name.qualified == 'xmlns:$prefix')
+          .firstOrNull
+          ?.value;
+      if (uri != materialNamespace) {
+        throw const FormatException('Unsupported required 3MF extension');
+      }
     }
     final scale = _units[root.getAttribute('unit') ?? 'millimeter'];
     if (scale == null) throw const FormatException('Unsupported 3MF units');
@@ -149,6 +174,8 @@ class ThreeMfIO {
     }
 
     try {
+      final surfaceResources =
+          ThreeMfMaterials(child(root, 'resources'), files);
       final resources = <int, XmlElement>{};
       for (final o in children(child(root, 'resources'), 'object')) {
         final id = integer(o, 'id');
@@ -166,13 +193,10 @@ class ThreeMfIO {
           throw const FormatException('Invalid 3MF component graph');
         }
         final o = resources[id]!;
-        if (o.getAttribute('pid') != null || o.getAttribute('pindex') != null) {
-          throw const FormatException(
-              '3MF material properties are unsupported');
-        }
         final meshElement = children(o, 'mesh').firstOrNull;
         if (meshElement != null) {
           final builder = MeshBuilder();
+          final surface = ThreeMfSurfaceBuilder(surfaceResources, o);
           for (final v in children(child(meshElement, 'vertices'), 'vertex')) {
             if (++totalVertices > 2000000) {
               throw const FormatException('3MF instance vertex limit exceeded');
@@ -184,11 +208,6 @@ class ThreeMfIO {
             if (++totalFaces > 4000000) {
               throw const FormatException('3MF face limit exceeded');
             }
-            if (['pid', 'p1', 'p2', 'p3']
-                .any((name) => t.getAttribute(name) != null)) {
-              throw const FormatException(
-                  '3MF material properties are unsupported');
-            }
             final a = integer(t, 'v1'),
                 b = integer(t, 'v2'),
                 c = integer(t, 'v3');
@@ -197,9 +216,14 @@ class ThreeMfIO {
                 c >= builder.vertexCount) {
               throw const FormatException('Invalid 3MF triangle index');
             }
+            surface.add(t, [a, b, c]);
             builder.addTriangle(a, b, c);
           }
-          return builder.build();
+          return surface.finish(builder.build());
+        }
+        if (o.getAttribute('pid') != null || o.getAttribute('pindex') != null) {
+          throw const FormatException(
+              '3MF component material overrides unsupported');
         }
         return Modify.combine(
             children(child(o, 'components'), 'component').map((c) {

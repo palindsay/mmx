@@ -1,0 +1,18 @@
+[package]
+name = "mmx_gpu"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "vulkan", "metal", "dx12", "wgsl"] }
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"

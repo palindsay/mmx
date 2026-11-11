@@ -17,6 +17,7 @@ class Unwrap {
   /// Projects [mesh] onto the plane perpendicular to [axis] and normalizes the
   /// result into 0..1. [axis] is 0 (x), 1 (y) or 2 (z).
   static UvMesh planar(TriMesh mesh, {int axis = 1}) {
+    if (axis < 0 || axis > 2) throw ArgumentError.value(axis, 'axis');
     if (mesh.vertexCount == 0) return UvMesh(mesh, Float32List(0));
     final b = mesh.bounds();
     final minX = b.minX, minY = b.minY, minZ = b.minZ;
@@ -41,7 +42,13 @@ class Unwrap {
       uv[v * 2] = u.clamp(0.0, 1.0);
       uv[v * 2 + 1] = w.clamp(0.0, 1.0);
     }
-    return UvMesh(mesh, uv);
+    final out = mesh.clone();
+    out.cornerUvs = Float32List(out.indices.length * 2);
+    for (var i = 0; i < out.indices.length; i++) {
+      out.cornerUvs![i * 2] = uv[out.indices[i] * 2];
+      out.cornerUvs![i * 2 + 1] = uv[out.indices[i] * 2 + 1];
+    }
+    return UvMesh(out, uv);
   }
 
   /// Unwraps each connected shell separately, so overlapping shells do not

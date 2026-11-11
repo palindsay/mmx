@@ -74,6 +74,23 @@ class Mirror {
           : Float32List.fromList([
               if (keepOriginal) ...mesh.vertexColors!,
               ...mesh.vertexColors!,
+            ])
+      ..materials = mesh.materials
+      ..faceMaterials = mesh.faceMaterials == null
+          ? null
+          : Uint16List.fromList([
+              if (keepOriginal) ...mesh.faceMaterials!,
+              ...mesh.faceMaterials!
+            ])
+      ..cornerUvs = mesh.cornerUvs == null
+          ? null
+          : Float32List.fromList([
+              if (keepOriginal) ...mesh.cornerUvs!,
+              for (var f = 0; f < mesh.faceCount; f++)
+                for (final k in (flipNormals ? [0, 2, 1] : [0, 1, 2])) ...[
+                  mesh.cornerUvs![f * 6 + k * 2],
+                  mesh.cornerUvs![f * 6 + k * 2 + 1]
+                ]
             ]);
     out.removeDegenerateFaces(minArea: 0);
     if (weldTolerance > 0) {
@@ -102,6 +119,7 @@ class Extruder {
     bool smoothBoundary = false,
     int smoothIterations = 4,
   }) {
+    mesh.requireUntextured('Extrude');
     if (faceMask.length != mesh.faceCount ||
         !distance.isFinite ||
         smoothIterations < 0 ||

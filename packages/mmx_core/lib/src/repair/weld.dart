@@ -73,6 +73,8 @@ class Weld {
     final seen = <String>{};
     final keep = <int>[];
     final groups = mesh.faceGroups == null ? null : <int>[];
+    final uvs = mesh.cornerUvs == null ? null : <double>[];
+    final materials = mesh.faceMaterials == null ? null : <int>[];
     for (var f = 0; f < mesh.faceCount; f++) {
       final ids = <int>[
         mesh.indices[f * 3],
@@ -82,6 +84,8 @@ class Weld {
       final key = '${ids[0]}_${ids[1]}_${ids[2]}';
       if (seen.add(key)) {
         groups?.add(mesh.faceGroups![f]);
+        uvs?.addAll(mesh.cornerUvs!.sublist(f * 6, f * 6 + 6));
+        materials?.add(mesh.faceMaterials![f]);
         keep.addAll(<int>[
           mesh.indices[f * 3],
           mesh.indices[f * 3 + 1],
@@ -93,6 +97,10 @@ class Weld {
     if (removed > 0) {
       mesh.indices = Uint32List.fromList(keep);
       if (groups != null) mesh.faceGroups = Uint16List.fromList(groups);
+      if (uvs != null) mesh.cornerUvs = Float32List.fromList(uvs);
+      if (materials != null) {
+        mesh.faceMaterials = Uint16List.fromList(materials);
+      }
     }
     return removed;
   }

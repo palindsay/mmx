@@ -23,12 +23,23 @@ class Decimator {
     double? maxDeviation,
     void Function(int current, int target)? progress,
   }) {
+    input.requireUntextured('Decimation');
+    if ((percentage != null &&
+            (!percentage.isFinite || percentage < 0 || percentage > 1)) ||
+        (targetFaceCount != null && targetFaceCount < 0) ||
+        (maxDeviation != null &&
+            (!maxDeviation.isFinite || maxDeviation < 0))) {
+      throw ArgumentError('Invalid reduction target or deviation');
+    }
     final target = targetFaceCount ??
         (percentage == null
             ? (input.faceCount * 0.5).round()
             : (input.faceCount * percentage).round());
     if (target >= input.faceCount || input.faceCount == 0) return input.clone();
 
+    final pinned = preserveBoundary
+        ? {for (final e in MeshTopology(input).boundaryEdges()) ...e.take(2)}
+        : <int>{};
     final n = input.vertexCount;
     final positions = <double>[...input.positions];
     final faces = <List<int>>[];
@@ -91,7 +102,9 @@ class Decimator {
     final heap = _EdgeHeap();
     void pushEdges(int v) {
       for (final w in _neighbors(vFaces[v], faces)) {
-        if (!vAlive[w] || w == v) continue;
+        if (!vAlive[w] || w == v || pinned.contains(v) || pinned.contains(w)) {
+          continue;
+        }
         if (uniform) {
           // Meshmixer's Uniform reduce uses a shortest-edges-first criterion
           // and collapses to the midpoint, producing regularly shaped

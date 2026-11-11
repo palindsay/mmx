@@ -1,11 +1,21 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+
+import '../geom/bbox.dart';
+import '../spatial/bvh.dart';
 
 import '../mesh/topology.dart';
 import '../mesh/tri_mesh.dart';
 
 /// Defect classes surfaced by Meshmixer's Inspector (observed strings:
 /// blue = hole, red = non-manifold, magenta = small disconnected component).
-enum DefectKind { hole, nonManifoldEdge, nonManifoldVertex, smallComponent }
+enum DefectKind {
+  hole,
+  nonManifoldEdge,
+  nonManifoldVertex,
+  smallComponent,
+  selfIntersection
+}
 
 class MeshDefect {
   final DefectKind kind;
@@ -62,15 +72,16 @@ class MeshInspector {
     final (faceComp, compCount) = topo.components();
     if (compCount > 1) {
       final areas = List<double>.filled(compCount, 0);
+      final componentFaces = List.generate(compCount, (_) => <int>[]);
       for (var f = 0; f < mesh.faceCount; f++) {
         areas[faceComp[f]] += _faceArea(mesh, f);
+        componentFaces[faceComp[f]].add(f);
       }
       for (var c = 0; c < compCount; c++) {
         if (areas[c] > smallComponentArea) continue;
         final faces = <int>[];
         final verts = <int>{};
-        for (var f = 0; f < mesh.faceCount; f++) {
-          if (faceComp[f] != c) continue;
+        for (final f in componentFaces[c]) {
           faces.add(f);
           verts.addAll(<int>[
             mesh.indices[f * 3],
@@ -89,124 +100,76 @@ class MeshInspector {
     return defects;
   }
 
-  /// Splits bowtie vertices and >2-face edges so every edge has at most two
-  /// incident faces. This is a best-effort "Split Non-Manifold Surface":
-  /// it makes the mesh manifold without inventing geometry.
+  /// Separates vertex fans across edges with other than two incident faces.
+  /// Each (original vertex, incident face) gets its own fan mapping. Geometry,
+  /// face order, corner UVs, materials, groups and vertex colors are preserved.
+  /// Splitting can introduce boundaries; it does not claim to produce a solid.
   static TriMesh splitNonManifold(TriMesh mesh) {
     final topo = MeshTopology(mesh);
-    final builder = MeshBuilder();
-    // Map original vertex -> list of builder vertices, one per fan.
-    final fans = <int, List<int>>{};
-
-    int cloneVertex(int v) {
-      final id = builder.addVertex(mesh.vx(v), mesh.vy(v), mesh.vz(v));
-      return id;
-    }
-
-    // Pre-create one builder vertex per original vertex.
-    final base = List<int>.generate(mesh.vertexCount, (v) => cloneVertex(v));
-    final used = List<bool>.filled(mesh.vertexCount, false);
-
-    // Fan decomposition per vertex using the face adjacency graph.
+    final positions = <double>[...mesh.positions];
+    final colors =
+        mesh.vertexColors == null ? null : <double>[...mesh.vertexColors!];
+    final indices = Uint32List.fromList(mesh.indices);
     for (var v = 0; v < mesh.vertexCount; v++) {
-      final faces = topo.facesOfVertex(v);
-      if (faces.isEmpty) continue;
-      final adj = <int, Set<int>>{};
-      for (final f in faces) {
-        adj[f] = <int>{};
-      }
-      for (final f in faces) {
-        for (var k = 0; k < 3; k++) {
-          final a = mesh.indices[f * 3 + k];
-          final b = mesh.indices[f * 3 + (k + 1) % 3];
-          if (a != v && b != v) continue;
-          final other = a == v ? b : a;
-          for (final g
-              in topo.edgeFaces[topo.edgeKey(v, other)] ?? const <int>[]) {
-            if (g != f && adj.containsKey(g)) {
-              adj[f]!.add(g);
-              adj[g]!.add(f);
+      final remaining = topo.facesOfVertex(v).toSet();
+      var first = true;
+      while (remaining.isNotEmpty) {
+        final mapped = first ? v : positions.length ~/ 3;
+        if (!first) {
+          positions.addAll([mesh.vx(v), mesh.vy(v), mesh.vz(v)]);
+          colors?.addAll(mesh.vertexColors!.sublist(v * 3, v * 3 + 3));
+        }
+        first = false;
+        final seed = remaining.first;
+        remaining.remove(seed);
+        final stack = [seed];
+        while (stack.isNotEmpty) {
+          final f = stack.removeLast();
+          for (var k = 0; k < 3; k++) {
+            if (mesh.indices[f * 3 + k] == v) indices[f * 3 + k] = mapped;
+            final a = mesh.indices[f * 3 + k];
+            final b = mesh.indices[f * 3 + (k + 1) % 3];
+            if (a != v && b != v) continue;
+            final adjacent = topo.edgeFaces[topo.edgeKey(a, b)]!;
+            if (adjacent.length != 2) continue;
+            for (final g in adjacent) {
+              if (remaining.remove(g)) stack.add(g);
             }
           }
         }
       }
-      final seen = <int>{};
-      final comps = <List<int>>[];
-      for (final f in faces) {
-        if (seen.contains(f)) continue;
-        final comp = <int>[];
-        final stack = <int>[f];
-        seen.add(f);
-        while (stack.isNotEmpty) {
-          final cur = stack.removeLast();
-          comp.add(cur);
-          for (final nb in adj[cur]!) {
-            if (seen.add(nb)) stack.add(nb);
-          }
-        }
-        comps.add(comp);
-      }
-      if (comps.length <= 1) continue;
-      fans[v] = <int>[base[v]];
-      for (var i = 1; i < comps.length; i++) {
-        fans[v]!.add(cloneVertex(v));
-      }
-      // Assign fan ids to faces.
-      for (var i = 0; i < comps.length; i++) {
-        for (final f in comps[i]) {
-          _faceFan[f] = i;
-        }
-      }
-      used[v] = true;
     }
-
-    for (var f = 0; f < mesh.faceCount; f++) {
-      final ids = <int>[];
-      for (var k = 0; k < 3; k++) {
-        final v = mesh.indices[f * 3 + k];
-        final list = fans[v];
-        if (list == null) {
-          ids.add(base[v]);
-        } else {
-          final fan = _faceFan[f] ?? 0;
-          ids.add(list[fan < list.length ? fan : 0]);
-        }
-      }
-      if (ids[0] == ids[1] || ids[1] == ids[2] || ids[0] == ids[2]) continue;
-      builder.addTriangle(ids[0], ids[1], ids[2]);
-    }
-    _faceFan.clear();
-    final out = builder.build();
-    out.removeDegenerateFaces();
-    out.compact();
+    final out = mesh.clone();
+    out.positions = Float32List.fromList(positions);
+    out.indices = indices;
+    out.vertexColors = colors == null ? null : Float32List.fromList(colors);
     return out;
   }
 
-  static final Map<int, int> _faceFan = <int, int>{};
-
-  /// Broad-phase self-intersection hunt: triangle pairs whose boxes overlap
-  /// are tested exactly. Reports the first few defects rather than all, which
-  /// matches the Inspector's per-region behaviour.
+  /// BVH broad phase followed by a separating-axis triangle test, including
+  /// coplanar axes. Exhausting the reporting budget fails explicitly: a partial
+  /// inspection must never be presented as a clean mesh.
   static List<MeshDefect> _selfIntersections(TriMesh mesh, {int limit = 5000}) {
-    final topo = MeshTopology(mesh);
+    final bvh = TriangleBVH.build(mesh);
     final out = <MeshDefect>[];
-    for (var f = 0; f < mesh.faceCount && out.length < limit; f++) {
-      final a = mesh.indices[f * 3],
-          b = mesh.indices[f * 3 + 1],
-          c = mesh.indices[f * 3 + 2];
-      final bbox = _faceBox(mesh, f);
-      // Cheap check against adjacent faces via vertex rings.
-      for (final v in <int>[a, b, c]) {
-        for (final g in topo.facesOfVertex(v)) {
-          if (g <= f) continue;
-          if (_shareVertex(mesh, f, g)) continue;
-          final ob = _faceBox(mesh, g);
-          if (!_boxesOverlap(bbox, ob)) continue;
-          if (_triTri(mesh, f, g)) {
-            out.add(MeshDefect(DefectKind.nonManifoldEdge,
-                vertices: <int>[a, b, c], faces: <int>[f, g], metric: 0));
-            break;
+    for (var f = 0; f < mesh.faceCount; f++) {
+      final box = _faceBox(mesh, f);
+      for (final g in bvh.overlap(
+          BBox.fromBounds(box[0], box[1], box[2], box[3], box[4], box[5]),
+          exact: true)) {
+        if (g <= f) continue;
+        if (_triTri(mesh, f, g)) {
+          if (out.length >= limit) {
+            throw StateError(
+                'Intersection report limit exceeded ($limit); inspection incomplete');
           }
+          out.add(MeshDefect(DefectKind.selfIntersection,
+              vertices: {
+                ...mesh.indices.sublist(f * 3, f * 3 + 3),
+                ...mesh.indices.sublist(g * 3, g * 3 + 3)
+              }.toList(),
+              faces: [f, g],
+              metric: 0));
         }
       }
     }
@@ -230,14 +193,6 @@ class MeshInspector {
     return <double>[minx, miny, minz, maxx, maxy, maxz];
   }
 
-  static bool _boxesOverlap(List<double> a, List<double> b) =>
-      a[3] >= b[0] &&
-      a[0] <= b[3] &&
-      a[4] >= b[1] &&
-      a[1] <= b[4] &&
-      a[5] >= b[2] &&
-      a[2] <= b[5];
-
   static bool _shareVertex(TriMesh m, int f, int g) {
     for (var i = 0; i < 3; i++) {
       for (var j = 0; j < 3; j++) {
@@ -251,6 +206,35 @@ class MeshInspector {
   static bool _triTri(TriMesh m, int f, int g) {
     final ta = _triVerts(m, f);
     final tb = _triVerts(m, g);
+    // Move adjacent triangles slightly into their relative interiors so a
+    // shared edge/vertex alone is not reported as an intersection. Normalize
+    // around a local origin to avoid scale- and translation-dependent tests.
+    final origin = List<double>.from(ta[0]);
+    var scale = 0.0;
+    for (final p in [...ta, ...tb]) {
+      for (var k = 0; k < 3; k++) {
+        p[k] -= origin[k];
+        scale = math.max(scale, p[k].abs());
+      }
+    }
+    if (scale == 0) return false;
+    for (final t in [ta, tb]) {
+      for (final p in t) {
+        for (var k = 0; k < 3; k++) {
+          p[k] /= scale;
+        }
+      }
+      if (_shareVertex(m, f, g)) {
+        final center = [
+          for (var k = 0; k < 3; k++) (t[0][k] + t[1][k] + t[2][k]) / 3
+        ];
+        for (final p in t) {
+          for (var k = 0; k < 3; k++) {
+            p[k] += (center[k] - p[k]) * 1e-7;
+          }
+        }
+      }
+    }
     final axes = <List<double>>[];
     final na = _cross(_sub(ta[1], ta[0]), _sub(ta[2], ta[0]));
     final nb = _cross(_sub(tb[1], tb[0]), _sub(tb[2], tb[0]));
@@ -258,6 +242,8 @@ class MeshInspector {
     axes.add(nb);
     for (var i = 0; i < 3; i++) {
       final ea = _sub(ta[(i + 1) % 3], ta[i]);
+      axes.add(_cross(na, ea));
+      axes.add(_cross(nb, _sub(tb[(i + 1) % 3], tb[i])));
       for (var j = 0; j < 3; j++) {
         final eb = _sub(tb[(j + 1) % 3], tb[j]);
         axes.add(_cross(ea, eb));

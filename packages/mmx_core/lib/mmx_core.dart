@@ -7,6 +7,7 @@
 library;
 
 export 'src/analysis/analysis.dart';
+export 'src/analysis/wall_thickness.dart';
 export 'src/fab/packing.dart';
 export 'src/fab/slicer.dart';
 export 'src/fab/supports.dart';
@@ -17,9 +18,11 @@ export 'src/io/obj.dart';
 export 'src/io/ply.dart';
 export 'src/io/stl.dart';
 export 'src/io/threemf.dart';
+export 'src/io/texture.dart';
 export 'src/io/zip.dart';
 export 'src/mesh/topology.dart';
 export 'src/mesh/tri_mesh.dart';
+export 'src/mesh/material.dart';
 export 'src/repair/bridge.dart';
 export 'src/repair/holes.dart';
 export 'src/repair/inspector.dart';
@@ -50,3 +53,8 @@ export 'src/tools/unwrap.dart';
 
 export 'src/io/project.dart';
 export 'src/io/atomic_file.dart';
+
+export 'src/tools/selection_edit.dart';
+export 'src/scan/workflow.dart';
+export 'src/scan/recipe.dart';
+export 'src/scan/provenance.dart';

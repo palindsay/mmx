@@ -29,7 +29,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.9'
@@ -38,13 +38,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Pinned native renderer toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          if [ '${{ runner.os }}' = macOS ]; then
+            rustup target add --toolchain 1.99.1 aarch64-apple-darwin x86_64-apple-darwin
+          fi
       - name: Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb libvulkan1 mesa-vulkan-drivers
+      - name: Native renderer format and parser checks
+        working-directory: apps/mmx_studio/native_renderer
+        run: |
+          cargo fmt --check
+          cargo test --locked --release
+          cargo clippy --locked --release --all-targets -- -D warnings
       - name: Verify kernel and Studio
         run: ./tool/verify.sh
-      - name: Packaging regression tests
-        run: python -B -m unittest discover -s tool -p 'test_package_release.py'
+      - name: Build and packaging regression tests
+        run: |
+          python -B -m unittest discover -s tool -p 'test_package_release.py'
+          python -B -m unittest discover -s tool -p 'test_build.py'
       - name: Kernel coverage gate
         if: runner.os == 'Linux'
         run: ./tool/coverage.sh
@@ -65,17 +79,33 @@ jobs:
       - name: Desktop integration workflows
         working-directory: apps/mmx_studio
         run: |
-          if [ '${{ runner.os }}' = Linux ]; then
-            xvfb-run -a flutter test integration_test -d linux
-          else
-            flutter test integration_test -d '${{ matrix.platform }}'
-          fi
-      - name: Compile CLI
-        working-directory: packages/mmx_core
-        run: dart compile exe bin/mmx.dart -o mmx-${{ matrix.platform }}.exe
-      - name: Build desktop
+          # Flutter 3.47.9 reuses a closed desktop log reader across test files.
+          # A new Flutter invocation per file preserves every native test.
+          for test_file in integration_test/*_test.dart; do
+            if [ '${{ runner.os }}' = Linux ]; then
+              dbus-run-session -- xvfb-run -a flutter test "$test_file" -d linux
+            else
+              flutter test "$test_file" -d '${{ matrix.platform }}'
+            fi
+          done
+      - name: Build optimized CLI and desktop
+        run: python tool/build.py --platform '${{ matrix.platform }}'
+      - name: Native renderer depth and texture acceptance
         working-directory: apps/mmx_studio
-        run: flutter build ${{ matrix.platform }} --release
+        run: |
+          case '${{ matrix.platform }}' in
+            linux) MMX_GPU_LIBRARY="$PWD/build/linux/x64/release/bundle/lib/libmmx_gpu.so" ;;
+            windows) MMX_GPU_LIBRARY="$PWD/build/windows/x64/runner/Release/mmx_gpu.dll" ;;
+            macos) MMX_GPU_LIBRARY="$PWD/build/macos/Build/Products/Release/mmx_studio.app/Contents/Frameworks/libmmx_gpu.dylib" ;;
+          esac
+          export MMX_GPU_LIBRARY
+          flutter test test/gpu_renderer_test.dart
+          dart run tool/probe_gpu.dart --require-native > '../../gpu-${{ matrix.platform }}.json'
+      - name: Upload native adapter capability
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-capability-${{ matrix.platform }}
+          path: gpu-${{ matrix.platform }}.json
       - name: Record verified build inputs
         run: python tool/package_release.py '${{ matrix.platform }}' --record-build
       - name: Find Windows installer compiler
@@ -93,6 +123,7 @@ jobs:
       - name: Record toolchain and dependency inventory
         run: |
           flutter --version > toolchain.txt
+          rustc +1.99.1 --version >> toolchain.txt
           git rev-parse HEAD >> toolchain.txt
           (cd apps/mmx_studio && flutter pub deps --json) > dependencies.json
           python tool/collect_licenses.py

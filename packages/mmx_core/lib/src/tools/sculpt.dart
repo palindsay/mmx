@@ -166,6 +166,11 @@ class Sculptor {
     double symmetryPlaneX = 0,
     bool symmetry = false,
   }) {
+    if ((refine &&
+            [BrushOp.draw, BrushOp.inflate, BrushOp.flatten].contains(op)) ||
+        op == BrushOp.reduce) {
+      mesh.requireUntextured('Dynamic sculpt topology');
+    }
     var work = mesh.clone();
     if (refine &&
         (op == BrushOp.draw ||

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'scan_commands.dart';
 import 'dart:convert';
 import 'package:args/args.dart';
 import 'dart:typed_data';
@@ -8,13 +9,16 @@ import 'package:mmx_core/mmx_core.dart';
 const String _usage = '''
 mmx — cross-platform mesh kernel CLI (Meshmixer-class operators)
 
+  mmx scan <input> [--units mm|cm|m|inch] [--report report.json]
+  mmx cleanup <input> <output> --recipe recipe.json
+  mmx batch <inputs...> --recipe recipe.json --outdir directory
   mmx info <file> [--json]
-  mmx repair <in> <out> [--weld 1e-5]
+  mmx repair <in> <out> [--weld 1e-5] [--fill-holes]
   mmx remesh <in> <out> --edge <len> [--iters 6] [--adaptive 0-1]
   mmx reduce <in> <out> --percent <0-1> | --faces <n> [--uniform] [--max-dev <d>]
-  mmx solid <in> <out> [--mode fast|accurate|blocky] [--res 128] [--offset 0] [--smooth 0]
+  mmx solid <in> <out> [--mode fast|accurate|blocky] [--res 128] [--offset 0] [--smooth 0] [--min-thickness 0] [--max-growth <d>] [--attempts 6]
   mmx boolean <a> <b> <out> --op union|intersection|difference [--precise] [--edge <len>]
-  mmx hollow <in> <out> --thickness <t> [--holes 3] [--hole-radius <r>]
+  mmx hollow <in> <out> --thickness <t> [--holes 3] [--hole-radius <r>] [--min-thickness 0] [--max-growth <d>] [--attempts 6]
   mmx offset <in> <out> --distance <d>
   mmx supports <in> <out> [--angle 45] [--density 0.5] [--bed 0]
   mmx pack <out> <in...> [--bed 200] [--quality 1]
@@ -42,6 +46,25 @@ class UsageError implements Exception {
   String toString() => message;
 }
 
+void reportWallCertificate(SolidResult result) {
+  final certificate = result.wallCertificate;
+  if (certificate == null) return;
+  stdout.writeln(jsonEncode({
+    'wallClearance': {
+      'metric': WallThicknessCertificate.metric,
+      'status': certificate.status.name,
+      'verifiedLowerBound': certificate.verifiedLowerBound,
+      'numericalMargin': certificate.numericalMargin,
+      'candidatePairs': certificate.candidatePairs,
+      'appliedOffset': result.appliedOffset,
+      'appliedShellThickness': result.appliedShellThickness,
+      'attempts': result.thicknessAttempts,
+      'reconstruction': result.reconstruction,
+      'reconstructionDiagnostic': result.reconstructionDiagnostic,
+    }
+  }));
+}
+
 Future<void> main(List<String> args) async {
   try {
     await run(args);
@@ -59,14 +82,21 @@ Future<void> run(List<String> args) async {
     stdout.writeln(_usage);
     return;
   }
+  if ({'scan', 'cleanup', 'batch'}.contains(args.first)) {
+    await runScanCommand(args);
+    return;
+  }
   const specs = <String, (int, String)>{
     'info': (1, 'json'),
-    'repair': (2, 'weld'),
+    'repair': (2, 'weld fill-holes'),
     'remesh': (2, 'edge iters adaptive debug-topology'),
     'reduce': (2, 'percent faces uniform max-dev'),
-    'solid': (2, 'mode res offset smooth'),
+    'solid': (2, 'mode res offset smooth min-thickness max-growth attempts'),
     'boolean': (3, 'op precise edge res'),
-    'hollow': (2, 'thickness holes hole-radius res'),
+    'hollow': (
+      2,
+      'thickness holes hole-radius res min-thickness max-growth attempts'
+    ),
     'offset': (2, 'distance res'),
     'supports': (2, 'angle density post base bed'),
     'pack': (2, 'bed quality'),
@@ -93,6 +123,7 @@ Future<void> run(List<String> args) async {
   if (spec == null) throw UsageError('Unknown command: $cmd');
   final parser = ArgParser()..addFlag('help', abbr: 'h', negatable: false);
   const switches = {
+    'fill-holes',
     'precise',
     'keep',
     'uniform',
@@ -135,6 +166,7 @@ Future<void> run(List<String> args) async {
     'kind': ['box', 'cylinder', 'sphere']
   };
   const integers = {
+    'attempts',
     'faces',
     'iters',
     'res',
@@ -198,6 +230,9 @@ Future<void> run(List<String> args) async {
     if (e.key == 'res' && (n < 8 || n > 256)) {
       throw UsageError('--res must be in [8,256]');
     }
+    if (e.key == 'attempts' && (n < 1 || n > 12)) {
+      throw UsageError('--attempts must be in [1,12]');
+    }
     if ({'width', 'height'}.contains(e.key) && n > 4096) {
       throw UsageError('--${e.key} exceeds 4096');
     }
@@ -216,13 +251,17 @@ Future<void> run(List<String> args) async {
       stderr.writeln('missing file: $path');
       throw FileSystemException('Input file does not exist', path);
     }
-    return MeshIO.readBytes(path, f.readAsBytesSync());
+    return MeshIO.readFile(path);
   }
 
   Future<void> save(String path, TriMesh mesh) async {
-    await writeFileAtomically(path, MeshIO.writeBytes(path, mesh));
+    final companions =
+        await MeshIO.commitExport(path, MeshIO.prepareExport(path, mesh));
     stdout.writeln(
         'wrote $path (${mesh.vertexCount} verts, ${mesh.faceCount} faces)');
+    if (companions != null) {
+      stdout.writeln('Keep companion folder with OBJ: $companions');
+    }
   }
 
   double flag(String name, double fallback) =>
@@ -270,8 +309,13 @@ Future<void> run(List<String> args) async {
         mesh = Weld.weldCracks(mesh, tolerance: flag('weld', 1e-5));
         Weld.removeDuplicateFaces(mesh);
         mesh = MeshInspector.splitNonManifold(mesh);
-        mesh = HoleFiller.fill(mesh, mode: HoleFillMode.smooth);
+        if (flags.containsKey('fill-holes')) {
+          mesh = HoleFiller.fill(mesh,
+              mode: HoleFillMode.smooth, requireAll: true);
+        }
+        final report = ScanWorkflow.inspect(mesh);
         await save(positional[1], mesh);
+        stdout.writeln(jsonEncode(report.toJson()));
       }
     case 'remesh':
       {
@@ -298,8 +342,16 @@ Future<void> run(List<String> args) async {
         final out = Decimator.reduce(mesh,
             targetFaceCount: faces,
             percentage: pct,
-            uniform: flags.containsKey('uniform'),
-            maxDeviation: maxDev == null || maxDev <= 0 ? null : maxDev);
+            uniform: flags.containsKey('uniform'));
+        if (maxDev != null) {
+          if (maxDev <= 0) throw UsageError('--max-dev must be positive');
+          final deviation = SurfaceDeviation.measure(mesh, out);
+          if (deviation.maximum > maxDev) {
+            throw StateError(
+                'Sampled surface deviation ${deviation.maximum} exceeds $maxDev; use a less aggressive reduction');
+          }
+          stdout.writeln(jsonEncode({'deviation': deviation.toJson()}));
+        }
         await save(positional[1], out);
       }
     case 'solid':
@@ -314,11 +366,16 @@ Future<void> run(List<String> args) async {
             mode: mode,
             resolution: flag('res', 128).toInt(),
             offset: flag('offset', 0),
-            smoothing: flag('smooth', 0).toInt());
+            smoothing: flag('smooth', 0).toInt(),
+            minThickness: flag('min-thickness', 0),
+            maxThicknessAttempts: flag('attempts', 6).toInt(),
+            maxAdditionalOffset:
+                flags.containsKey('max-growth') ? flag('max-growth', 0) : null);
         stdout.writeln(
             'grid ${r.gridResolution} cell ${r.cellSize.toStringAsFixed(4)} '
             '${r.elapsedMs}ms');
         await save(positional[1], r.mesh);
+        reportWallCertificate(r);
       }
     case 'boolean':
       {
@@ -349,8 +406,13 @@ Future<void> run(List<String> args) async {
             thickness: flag('thickness', mesh.bounds().diagonal * 0.03),
             holes: flag('holes', 3).toInt(),
             holeRadius: flag('hole-radius', mesh.bounds().diagonal * 0.02),
-            resolution: flag('res', 128).toInt());
+            resolution: flag('res', 128).toInt(),
+            minThickness: flag('min-thickness', 0),
+            maxThicknessAttempts: flag('attempts', 6).toInt(),
+            maxAdditionalThickness:
+                flags.containsKey('max-growth') ? flag('max-growth', 0) : null);
         await save(positional[1], r.mesh);
+        reportWallCertificate(r);
       }
     case 'offset':
       {

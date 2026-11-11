@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../mesh/limits.dart';
 import '../mesh/tri_mesh.dart';
 import 'voxel.dart';
 
@@ -11,7 +12,10 @@ import 'voxel.dart';
 /// Vertices lie at average edge crossings. Ambiguous sign configurations can
 /// still produce non-manifold topology; callers must validate their output.
 class SurfaceNets {
-  static TriMesh polygonize(VoxelGrid grid) {
+  static TriMesh polygonize(VoxelGrid grid, {int? maximumFaces}) {
+    if (maximumFaces != null) {
+      checkGeneratedSize(0, 0, maximumFaces, 'Surface nets');
+    }
     final nx = grid.nx, ny = grid.ny, nz = grid.nz;
     final cellVertex = Int32List(nx * ny * nz);
     for (var i = 0; i < cellVertex.length; i++) {
@@ -73,6 +77,9 @@ class SurfaceNets {
           }
           if (crossings == 0) continue;
           final id = pos.length ~/ 3;
+          if (maximumFaces != null) {
+            checkGeneratedSize(0, id + 1, maximumFaces, 'Surface nets');
+          }
           pos.add(sx / crossings);
           pos.add(sy / crossings);
           pos.add(sz / crossings);
@@ -95,6 +102,10 @@ class SurfaceNets {
 
     void emitQuad(int a, int b, int c, int d, int axis, bool insideToOutside) {
       if (a < 0 || b < 0 || c < 0 || d < 0) return;
+      if (maximumFaces != null) {
+        checkGeneratedSize(tris.length ~/ 3 + 2, pos.length ~/ 3, maximumFaces,
+            'Surface nets');
+      }
       // Use the grid's cyclic cell ordering, not a geometric cross product:
       // distinct cell vertices can coincide at sharp corners, where the cross
       // product is zero and cannot determine orientation.

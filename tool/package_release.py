@@ -89,6 +89,17 @@ def build_input_manifest(system):
     cli = ROOT / f'packages/mmx_core/mmx-{system}.exe'
     if not bundle.is_dir() or not cli.is_file():
         raise RuntimeError('Build the desktop bundle and CLI before recording or packaging')
+    native_library, native_notices = {
+        'linux': ('lib/libmmx_gpu.so', 'data/native-licenses'),
+        'windows': ('mmx_gpu.dll', 'data/native-licenses'),
+        'macos': ('Contents/Frameworks/libmmx_gpu.dylib',
+                  'Contents/Resources/native-licenses'),
+    }[system]
+    library = bundle / native_library
+    if not library.is_file() or library.stat().st_size == 0:
+        raise RuntimeError('Native renderer missing from desktop bundle; rebuild the app')
+    if not list((bundle / native_notices).rglob('index.json')):
+        raise RuntimeError('Native renderer dependency notices missing; rebuild the app')
     files = {f'{bundle.relative_to(ROOT).as_posix()}/{name}': item
              for name, item in tree_manifest(bundle).items()}
     files[cli.relative_to(ROOT).as_posix()] = {
@@ -143,7 +154,8 @@ def windows_sign_command():
 def sign_windows_payload(stage):
     # The installer manifest covers the DLLs, including vendor-signed CRT files.
     # Preserve vendor signatures rather than replacing them with our identity.
-    for path in (stage / 'mmx.exe', stage / 'studio/mmx_studio.exe'):
+    for path in (stage / 'mmx.exe', stage / 'studio/mmx_studio.exe',
+                 stage / 'studio/mmx_gpu.dll'):
         subprocess.run([*windows_sign_command(), '-Paths', str(path)], check=True)
 
 

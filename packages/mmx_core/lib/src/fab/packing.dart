@@ -44,6 +44,19 @@ class Packer {
     bool allowRotation = true,
     double rotationStepDegrees = 90,
   }) {
+    if (![bedWidth, bedDepth, border, spacing, rotationStepDegrees]
+            .every((v) => v.isFinite) ||
+        bedWidth <= 0 ||
+        bedDepth <= 0 ||
+        border < 0 ||
+        spacing < 0 ||
+        border * 2 >= math.min(bedWidth, bedDepth) ||
+        quality < 0 ||
+        quality > 3 ||
+        (allowRotation &&
+            (rotationStepDegrees < 0.1 || rotationStepDegrees > 360))) {
+      throw ArgumentError('Invalid bed dimensions, margins or packing quality');
+    }
     final sw = Stopwatch()..start();
     // Raster resolution scales with quality: 1 = 4 mm cells, 3 = 1 mm cells.
     final cellSize = switch (quality) {
@@ -52,8 +65,14 @@ class Packer {
       2 => 1.5,
       _ => 1.0,
     };
-    final nx = (bedWidth / cellSize).ceil();
-    final nz = (bedDepth / cellSize).ceil();
+    final usableWidth = bedWidth - 2 * border;
+    final usableDepth = bedDepth - 2 * border;
+    // Reserve spacing after each occupied footprint. The last object's
+    // trailing reservation may extend beyond the usable bed; its actual
+    // footprint is checked independently before acceptance.
+    final nx = ((usableWidth + spacing) / cellSize).ceil();
+    final nz = ((usableDepth + spacing) / cellSize).ceil();
+    if (nx * nz > 4000000) throw StateError('Packing grid exceeds 4M cells');
     final occupied = Uint8List(nx * nz);
 
     bool fits(int x0, int z0, int w, int h) {
@@ -83,11 +102,15 @@ class Packer {
 
     final placed = <PlacedObject>[];
     final unplaced = <int>[];
-    final margin = border + spacing;
+    final margin = border;
 
     for (final idx in order) {
       final mesh = meshes[idx];
       final b = mesh.bounds();
+      if (b.isEmpty || mesh.validate().isNotEmpty) {
+        unplaced.add(idx);
+        continue;
+      }
       final angles = <double>[0];
       if (allowRotation && rotationStepDegrees > 0) {
         for (var a = rotationStepDegrees; a < 360; a += rotationStepDegrees) {
@@ -115,14 +138,20 @@ class Packer {
           minZ = math.min(minZ, c[1]);
           maxZ = math.max(maxZ, c[1]);
         }
-        final w = ((maxX - minX) / cellSize).ceil() + 1;
-        final h = ((maxZ - minZ) / cellSize).ceil() + 1;
+        final width = maxX - minX, depth = maxZ - minZ;
+        final w = math.max(1, ((width + spacing) / cellSize).ceil());
+        final h = math.max(1, ((depth + spacing) / cellSize).ceil());
         if (w > nx || h > nz) continue;
         // Scan positions, preferring the rear-left origin.
         for (var z0 = 0; z0 + h <= nz; z0++) {
           for (var x0 = 0; x0 + w <= nx; x0++) {
-            if (!fits(x0, z0, w, h)) continue;
-            final cand = _Candidate(angle, x0, z0, w, h, minX, minZ);
+            if (x0 * cellSize + width > usableWidth + 1e-9 ||
+                z0 * cellSize + depth > usableDepth + 1e-9 ||
+                !fits(x0, z0, w, h)) {
+              continue;
+            }
+            final cand =
+                _Candidate(angle, x0, z0, w, h, minX, minZ, width, depth);
             // Prefer the lowest z, then lowest x (left-to-right, rear-first).
             if (best == null ||
                 cand.z0 < best.z0 ||
@@ -149,8 +178,8 @@ class Packer {
       m[12] = targetX;
       m[13] = targetY;
       m[14] = targetZ;
-      placed.add(PlacedObject(idx, m, (best.w) * cellSize, (best.h) * cellSize,
-          b.extentY, targetX, targetZ, best.angle));
+      placed.add(PlacedObject(idx, m, best.width, best.depth, b.extentY,
+          targetX, targetZ, best.angle));
     }
 
     var used = 0.0;
@@ -189,7 +218,7 @@ class Packer {
 class _Candidate {
   final double angle;
   final int x0, z0, w, h;
-  final double minX, minZ;
-  _Candidate(
-      this.angle, this.x0, this.z0, this.w, this.h, this.minX, this.minZ);
+  final double minX, minZ, width, depth;
+  _Candidate(this.angle, this.x0, this.z0, this.w, this.h, this.minX, this.minZ,
+      this.width, this.depth);
 }
